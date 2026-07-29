@@ -1,0 +1,187 @@
+# SentinelMind — Progress Log
+
+Running log of what's actually built and verified. Newest entries at the bottom.
+Plan and design decisions live in [PLAN.md](PLAN.md).
+
+---
+
+## Status
+
+| Component | State |
+|---|---|
+| `backend/decorator.py` | done — trace capture, subscriber bus, error passthrough |
+| `backend/session_context.py` | done — goal, bounded window, deterministic loop detection |
+| `backend/audit_log.py` | done — thread-safe store, filter/summary/export/clear |
+| `backend/meta_agent.py` | done — Groq verdict engine, context-aware, schema downgrade |
+| `backend/app.py` | done — Flask + SocketIO, 7 endpoints, `.env` loading |
+| `backend/demo_agent.py` | done — declares goal, 7-step scenario, `--record` / `--replay` |
+| `frontend/index.html` | done — live graph, verdict feed, goal banner, stat row |
+| `evals/` | done — 9 labelled cases + scoring harness |
+| `tests/` | done — **20 / 20 passing** |
+| `README.md` | done |
+| End-to-end demo run | done — **verified live against Groq** |
+| Git repository | initialized, 15 commits, **no remote yet** |
+| Deck updated for Groq | **not done — blocking** |
+
+**Tests passing:** 20 / 20 (deck says 15 — needs a one-word edit)
+**Eval accuracy:** **9 / 9 (100%)** on the labelled set
+**Verdict latency:** **p50 0.67s · p95 0.94s** (3s claim met, measured not asserted)
+**Provider:** Groq (`llama-3.3-70b-versatile`), OpenAI-compatible endpoint
+**Pushed to GitHub:** no (requires explicit approval)
+
+---
+
+## Verified
+
+- `pytest tests/ -q` → **20 passed in 1.07s**, offline, no key.
+- `python evals/run_eval.py` → **9/9, p50 0.67s, p95 0.94s.** Clean confusion matrix, no
+  off-diagonal entries.
+- **Loop detection confirmed working:** across three byte-identical `search_docs` calls the
+  verdicts escalate `OK → WARN → ANOMALY`, with confidence dipping to 0.70 on the ambiguous
+  middle case. A per-step classifier returns the same verdict for all three. This is the
+  clearest evidence that session context does what §4a of PLAN.md claims.
+- **Live demo run against the real API:** 9 events → 2 OK, 2 WARN, 5 ANOMALY, with genuine
+  explanations ("has been called repeatedly with the same input, indicating an infinite
+  loop"). Verdict latency 0.3–0.8s steady-state.
+- Rendered context block for a repeated call carries goal, preceding steps, and
+  `"has already occurred N time(s)"` — the loop signal reaching the model as a computed fact.
+
+### Cold start is real
+
+The first verdict of any server run takes **~6s** (connection setup); every subsequent one is
+under a second. Both the eval and the live run show it. On stage, the first node will sit grey
+noticeably longer than the rest. A warmup call on server start would fix it — not done yet.
+
+---
+
+## Open items
+
+1. **The offline fallback does not actually work offline — highest risk.** `--replay` skips the
+   monitored pipeline but the server still calls the API to judge each replayed event. It
+   survives a broken demo pipeline; it does **not** survive dead wifi or a dead API, which is
+   the failure it exists for. Fix: record *verdicts* alongside events and add a mode that
+   pushes pre-judged entries straight to the audit log and socket. This was mis-described in
+   PLAN.md until now; the doc is corrected.
+2. **Update the deck — blocking.** Slide 4 says "Meta-Agent: Claude Sonnet"; reference [1]
+   cites Anthropic docs and `claude-sonnet-4-6`. Both wrong. Slide 7 needs a Groq reference.
+   Test count says 15, actual is 20. And the impact slide can now say **0.94s p95** instead of
+   "under 3 seconds", which is a stronger and honest claim.
+3. **Warm the connection on server start** to kill the ~6s first-verdict cold start.
+4. **Confirm which structured-output path the model takes** (`json_schema` vs downgraded
+   `json_object`) so you know what you're demoing. Strict schema is the stronger claim.
+5. **LangChain wiring.** Deck names it as the monitored framework; the demo wraps plain
+   Python callables. `@monitor` is framework-agnostic so it's a small job — either wire it
+   or adjust the slide.
+6. **Grow the eval set.** 9 cases is enough to demo, thin to generalise from. 100% on 9 cases
+   is not 100% accuracy — say "9/9 on our labelled set", not "100% accurate", to judges.
+
+---
+
+## Log
+
+### 2026-07-29 — Session 1
+
+- Read the deck, extracted the concept, confirmed runtime (Python 3.14.2, Windows 10).
+- Wrote `PLAN.md`. Built all 6 modules bottom-up. 15/15 tests green.
+- **Decision:** every meta-agent failure degrades to `WARN` with `degraded: true` — never
+  `OK` (don't claim health we didn't verify), never `ANOMALY` (our outage isn't the
+  monitored agent's fault).
+- Fixed a `SyntaxError` in `demo_agent.main()` — `SERVER` read before its `global`.
+- **Flagged:** *"LangSmith logs. SentinelMind intervenes"* overstates the build.
+  Auto-correction is out of scope, so the dashboard shows that button disabled.
+
+### 2026-07-29 — Session 1, provider swap
+
+- **Decision: switched from Anthropic to Groq**, at the user's call. Free tier and LPU
+  speed. Cost: the deck no longer matches the build, and verdict quality on a 70B open
+  model is unproven versus a frontier model.
+- Rewrote `meta_agent.py` against the OpenAI-compatible client. Prompt and schema carried
+  over; call shape and response parsing changed.
+- **Decision:** request strict `json_schema`, downgrade once to `json_object` if rejected,
+  cache the result. Groq's structured-output support varies by model; a swap shouldn't
+  break the demo mid-run.
+- Added `temperature=0` (Groq accepts sampling params; Sonnet 5 rejects them) so verdicts
+  are reproducible. Hardened empty/truncated/non-object response paths.
+- Added `.gitignore`, `.env.example`, and the missing `load_dotenv()` call — `python-dotenv`
+  was in requirements but nothing invoked it, so `.env` would have been silently ignored.
+
+### 2026-07-29 — Session 1, session context + evals
+
+- **Found a correctness gap, not a polish item:** the deck claims infinite-loop and
+  goal-drift detection, and the per-step architecture could deliver neither. A loop exists
+  only across steps; drift needs a goal to drift from. The meta-agent was being asked to
+  detect properties that were not present in its input.
+- Built `session_context.py`: declared goal + bounded rolling window (default 8) + a
+  **deterministic** repeat count via `sha256(tool + input)` with sorted keys.
+- **Decision: count repeats ourselves, don't ask the model to.** Deterministic where
+  deterministic is possible; LLM judgement only where judgement is required. Asking a model
+  to notice three JSON blobs are identical is slower, costlier, and non-reproducible versus
+  computing it. Sorted-key hashing matters — without it, identical calls whose kwargs
+  serialized in a different order would fingerprint differently and the loop would vanish.
+- **Decision:** when no goal is declared, the prompt says so explicitly. An admitted blind
+  spot beats a model inventing a goal to measure drift against.
+- Wired context through `meta_agent.evaluate(event, context=...)` (optional, so existing
+  callers and tests are unaffected), `app.py` (record *after* judging, so a step never sees
+  itself as a repeat), `POST /session/goal` + `GET /session`, and the dashboard goal banner.
+- Built `evals/` — 9 labelled cases with written rationales, scored against the real model
+  with a confusion matrix and p50/p95 latency. This is the answer to slide 4's "How you
+  know it works: tests or evals": tests prove the plumbing with a fake model, the eval
+  proves the judgement with a real one and turns the 3-second claim into a measurement.
+- The harness **refuses to print accuracy when any case degraded** — a number computed over
+  failed API calls is worse than no number.
+- Added 5 tests for the context logic (20 total, up from 15).
+- Verified the rendered context block for the third identical call carries goal, history,
+  and `"has already occurred 2 time(s)"`.
+
+### 2026-07-29 — Session 1, first live run
+
+- User supplied a Groq key. It was pasted into `.env.example` — the one file the
+  `.gitignore` deliberately force-includes, so it would have been committed. Moved it to
+  `.env` (ignored) and restored the template with a placeholder plus a warning header.
+  Nothing was pushed, so nothing leaked.
+- **First eval run: 7/9 (78%), p95 1.62s.** Both misses were `loop_call_1` and
+  `loop_call_2`, predicted ANOMALY against expected OK/WARN.
+- **Diagnosed the misses as a flaw in the eval, not the model.** The loop cases used an
+  off-goal tool (`fetch_pricing` on a refund-window task) *and* ran immediately after the
+  hallucinated-tool ANOMALY. The model's explanations cited both — goal-irrelevance and
+  prior session health — which are defensible reads. Three variables, one measurement: the
+  cases could not tell us whether loop detection worked.
+- **Fixed the inputs, not the labels.** Relabelling until the model agrees is how an eval
+  stops meaning anything. Rebuilt the loop block to use an on-goal tool
+  (`search_docs("refund window expiry")`) and moved it ahead of the ANOMALY cases, so
+  repetition is the only variable that changes across the three.
+- **Second eval run: 9/9 (100%), p50 0.67s, p95 0.94s.** Loop block escalates
+  `OK → WARN → ANOMALY` as designed. Confusion matrix is clean.
+- Live end-to-end run against the real API: 2 OK / 2 WARN / 5 ANOMALY with genuine
+  explanations. Re-recorded `traces/last_run.json`.
+- **Found that `--replay` is not the offline fallback PLAN.md claimed** — it still calls the
+  API to judge replayed events. Corrected the doc and raised it to the top open item; this
+  is the biggest remaining demo risk.
+- Noted the ~6s cold start on the first verdict of any run.
+
+### 2026-07-29 — Session 1, file corruption incident
+
+- Found **13 character-level corruptions across 7 files** between two verified runs. Not
+  edits — single-character mutations: `__future__` → `__future_`, `annotations` →
+  `annotation`, `return` → `continue`, `not` → `aa`, `>=` → `<=`, `id` → `ID`, `O` → `0`,
+  and two characters dropped from the API key in `.env`.
+- Two were fatal (SyntaxError / ImportError — the project would not start). The worst was
+  silent: `_fallback()` returning `confidence: 1.0` instead of `0.0`, i.e. claiming total
+  certainty in a verdict it had failed to produce. That would have poisoned the audit log
+  and the eval's confidence column without any visible error.
+- All fixed and re-verified: 20/20 tests, eval 8/9.
+- **Cause unknown and unresolved.** The pattern is not human editing and not a formatter.
+  Suspect an IDE extension, a sync/backup tool, or failing storage. This needs diagnosing
+  before further work — anything built will keep degrading silently.
+- Recommend rotating the Groq key: it passed through a corrupted file.
+
+### 2026-07-29 — Session 1, repo and README
+
+- Wrote `README.md`: what it does, measured results with the caveats attached, the
+  architecture argument for session context, quick start, API and config reference, design
+  decisions, and a plainly-stated known-limitations section.
+- `git init` + **15 commits** in build order, each with reasoning in the body rather than a
+  bare summary line. Verified before the first commit that `.env` and `traces/` are excluded
+  by `.gitignore`; `.env.example` carries only a placeholder.
+- **No remote configured and nothing pushed.** `gh` is not installed on this machine, so the
+  GitHub repo has to be created manually or a remote URL supplied.
