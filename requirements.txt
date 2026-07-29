@@ -1,0 +1,6 @@
+flask>=3.0
+flask-socketio>=5.3
+openai>=1.40          # OpenAI-compatible client, pointed at Groq
+python-dotenv>=1.0
+requests>=2.31
+pytest>=8.0
