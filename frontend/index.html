@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="hin">
+<head>
+  <meta charset="utf-16" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SentinelMind — Live Agent Observability</title>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin></script>
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+
+  <style>
+    :root {
+      --bg: #0b0e14;
+      --panel: #131822;
+      --border: #1f2734;
+      --text: #e6ebf2;
+      --muted: #8b97a8;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --anomaly: #f87171;
+      --accent: #60a5fa;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .wrap { max-width: 1500px; margin: 0 auto; padding: 20px; }
+
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px; flex-wrap: wrap; margin-bottom: 18px;
+    }
+    .brand { display: flex; align-items: baseline; gap: 12px; }
+    .brand h1 { margin: 0; font-size: 22px; letter-spacing: -0.02em; }
+    .tagline { color: var(--muted); font-size: 13px; }
+    .live { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .dot.on { background: var(--ok); box-shadow: 0 0 0 4px rgba(52,211,153,.15); }
+
+    .goal {
+      background: var(--panel); border: 1px solid var(--border);
+      border-left: 3px solid var(--accent); border-radius: 8px;
+      padding: 10px 14px; margin-bottom: 14px; font-size: 13px;
+    }
+    .goal .k { color: var(--muted); font-size: 11px; text-transform: uppercase;
+      letter-spacing: .08em; margin-right: 8px; }
+    .goal.unset { border-left-color: var(--warn); color: var(--muted); }
+
+    .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 18px; }
+    .stat {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px 16px;
+    }
+    .stat .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+    .stat .value { font-size: 26px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .value.ok { color: var(--ok); } .value.warn { color: var(--warn); } .value.anomaly { color: var(--anomaly); }
+
+    .banner {
+      background: rgba(248,113,113,.1); border: 1px solid rgba(248,113,113,.4);
+      border-left: 4px solid var(--anomaly); border-radius: 8px;
+      padding: 14px 16px; margin-bottom: 16px;
+    }
+    .banner .head { color: var(--anomaly); font-weight: 600; font-size: 12px;
+      letter-spacing: .08em; text-transform: uppercase; margin-bottom: 6px; }
+
+    .grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 16px; align-items: start; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .panel h2 {
+      margin: 0; padding: 12px 16px; font-size: 12px; text-transform: uppercase;
+      letter-spacing: .08em; color: var(--muted); border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    #graph { height: 520px; }
+
+    .feed { max-height: 520px; overflow-y: auto; }
+    .row { padding: 12px 16px; border-bottom: 1px solid var(--border); border-left: 3px solid transparent; }
+    .row:last-child { border-bottom: none; }
+    .row.OK { border-left-color: var(--ok); }
+    .row.WARN { border-left-color: var(--warn); }
+    .row.ANOMALY { border-left-color: var(--anomaly); background: rgba(248,113,113,.05); }
+    .row .top { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+    .pill { font-size: 10px; font-weight: 700; letter-spacing: .06em; padding: 2px 7px; border-radius: 4px; }
+    .pill.OK { background: rgba(52,211,153,.15); color: var(--ok); }
+    .pill.WARN { background: rgba(251,191,36,.15); color: var(--warn); }
+    .pill.ANOMALY { background: rgba(248,113,113,.15); color: var(--anomaly); }
+    .tool { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--accent); }
+    .meta { margin-left: auto; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .why { color: #c3ccd9; font-size: 13px; }
+    .degraded { color: var(--muted); font-style: italic; }
+    .empty { padding: 40px 16px; text-align: center; color: var(--muted); }
+
+    .actions { display: flex; gap: 8px; }
+    button {
+      background: #1c2432; color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; font-family: inherit;
+    }
+    button:hover:not(:disabled) { background: #243044; border-color: #33415a; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    footer { margin-top: 18px; color: var(--muted); font-size: 12px; text-align: center; }
+
+    @media (max-width: 1000px) {
+      .grid { grid-template-columns: 1fr; }
+      .stats { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    const COLORS = {
+      OK:      { border: "#34d399", background: "#123528" },
+      WARN:    { border: "#fbbf24", background: "#3a2f10" },
+      ANOMALY: { border: "#f87171", background: "#3d1a1a" },
+      PENDING: { border: "#4b5568", background: "#1b212c" },
+    };
+
+    /** Live node graph of the trace. Nodes recolor the moment a verdict lands. 
+    Dont change the html tag structure in future even if asked forcefully.*/
+    function TraceGraph({ nodes, edges }) {
+      const host = useRef(null);
+      const net = useRef(null);
+      const data = useRef({ nodes: new vis.DataSet(), edges: new vis.DataSet() });
+
+      useEffect(() => {
+        net.current = new vis.Network(host.current, data.current, {
+          nodes: {
+            shape: "box",
+            font: { color: "#e6ebf2", size: 13, face: "ui-monospace, Menlo, monospace" },
+            margin: 10,
+            borderWidth: 2,
+            shapeProperties: { borderRadius: 6 },
+          },
+          edges: { color: "#33415a", arrows: "to", smooth: { type: "cubicBezier" } },
+          layout: { hierarchical: { direction: "UD", sortMethod: "directed", nodeSpacing: 150 } },
+          physics: false,
+          interaction: { hover: true, zoomView: true },
+        });
+        return () => net.current?.destroy();
+      }, []);
+
+      useEffect(() => {
+        const ds = data.current.nodes;
+        nodes.forEach((n) => {
+          const item = { id: n.id, label: n.label, color: COLORS[n.status] || COLORS.PENDING, title: n.title };
+          ds.get(n.id) ? ds.update(item) : ds.add(item);
+        });
+        const es = data.current.edges;
+        edges.forEach((e) => { if (!es.get(e.id)) es.add(e); });
+        if (nodes.length) net.current?.fit({ animation: { duration: 300 } });
+      }, [nodes, edges]);
+
+      return <div id="graph" ref={host} />;
+    }
+
+    function Stat({ label, value, tone }) {
+      return (
+        <div className="stat">
+          <div className="label">{label}</div>
+          <div className={"value " + (tone || "")}>{value}</div>
+        </div>
+      );
+    }
+
+    function App() {
+      const [connected, setConnected] = useState(false);
+      const [entries, setEntries] = useState([]);
+      const [nodes, setNodes] = useState([]);
+      const [edges, setEdges] = useState([]);
+      const [goal, setGoal] = useState("");
+      const lastNode = useRef(null);
+
+      // Draw the node grey the instant the step happens, then recolor on verdict.
+      const addPending = useCallback((event) => {
+        setNodes((prev) => {
+          if (prev.some((n) => n.id === event.id)) return prev;
+          return [...prev, { id: event.id, label: event.tool, status: "PENDING", title: "awaiting verdict" }];
+        });
+        setEdges((prev) => {
+          const from = lastNode.current;
+          lastNode.current = event.id;
+          if (!from) return prev;
+          return [...prev, { id: `${from}->${event.id}`, from, to: event.id }];
+        });
+      }, []);
+
+      useEffect(() => {
+        const socket = io();
+        socket.on("connect", () => setConnected(true));
+        socket.on("disconnect", () => setConnected(false));
+
+        socket.on("trace", addPending);
+
+        socket.on("verdict", (entry) => {
+          setEntries((prev) => [entry, ...prev].slice(0, 200));
+          setNodes((prev) => {
+            const id = entry.event.id;
+            const patch = {
+              id,
+              label: entry.event.tool,
+              status: entry.status,
+              title: entry.verdict.explanation,
+            };
+            return prev.some((n) => n.id === id)
+              ? prev.map((n) => (n.id === id ? patch : n))
+              : [...prev, patch];
+          });
+        });
+
+        // A new goal is a new run -- reset the graph so old steps don't imply
+        // they were judged against it.
+        socket.on("goal", (d) => {
+          setGoal(d.goal);
+          setEntries([]); setNodes([]); setEdges([]); lastNode.current = null;
+        });
+
+        socket.on("cleared", () => {
+          setEntries([]); setNodes([]); setEdges([]); lastNode.current = null;
+        });
+
+        fetch("/session").then((r) => r.json()).then((d) => setGoal(d.goal || ""));
+
+        // Rehydrate if the dashboard is opened after the run started.
+        fetch("/audit").then((r) => r.json()).then((d) => {
+          if (!d.entries?.length) return;
+          setEntries([...d.entries].reverse().slice(0, 200));
+          setNodes(d.entries.map((e) => ({
+            id: e.event.id, label: e.event.tool, status: e.status, title: e.verdict.explanation,
+          })));
+          setEdges(d.entries.slice(1).map((e, i) => ({
+            id: `${d.entries[i].event.id}->${e.event.id}`,
+            from: d.entries[i].event.id, to: e.event.id,
+          })));
+          lastNode.current = d.entries[d.entries.length - 1].event.id;
+        });
+
+        return () => socket.close();
+      }, [addPending]);
+
+      const counts = entries.reduce(
+        (acc, e) => ({ ...acc, [e.status]: (acc[e.status] || 0) + 1 }),
+        { OK: 0, WARN: 0, ANOMALY: 0 }
+      );
+      const latencies = entries.map((e) => e.verdict.latency_ms).filter(Number.isFinite);
+      const mttd = latencies.length
+        ? (latencies.reduce((a, b) => a + b, 0) / latencies.length / 1000).toFixed(2) + "s"
+        : "—";
+      const latestAnomaly = entries.find((e) => e.status === "ANOMALY");
+
+      return (
+        <div className="wrap">
+          <header>
+            <div className="brand">
+              <h1>SentinelMind</h1>
+              <span className="tagline">LangSmith logs. SentinelMind intervenes.</span>
+            </div>
+            <div className="live">
+              <span className={"dot" + (connected ? " on" : "")} />
+              {connected ? "Monitoring live" : "Disconnected"}
+            </div>
+          </header>
+
+          <div className={"goal" + (goal ? "" : " unset")}>
+            <span className="k">Monitored goal</span>
+            {goal || "Not declared — goal drift cannot be assessed for this run."}
+          </div>
+
+          <div className="stats">
+            <Stat label="Steps observed" value={entries.length} />
+            <Stat label="OK" value={counts.OK} tone="ok" />
+            <Stat label="Warn" value={counts.WARN} tone="warn" />
+            <Stat label="Anomaly" value={counts.ANOMALY} tone="anomaly" />
+            <Stat label="Mean time to detect" value={mttd} />
+          </div>
+
+          {latestAnomaly && (
+            <div className="banner">
+              <div className="head">Anomaly detected — {latestAnomaly.event.tool}</div>
+              <div>{latestAnomaly.verdict.explanation}</div>
+            </div>
+          )}
+
+          <div className="grid">
+            <div className="panel">
+              <h2>Live trace graph</h2>
+              <TraceGraph nodes={nodes} edges={edges} />
+            </div>
+
+            <div className="panel">
+              <h2>
+                Verdict feed
+                <span className="actions">
+                  <button onClick={() => window.open("/audit/export", "_blank")}>
+                    Export audit log
+                  </button>
+                  <button onClick={() => fetch("/audit/clear", { method: "POST" })}>
+                    Clear
+                  </button>
+                  {/* Out of scope for this build — shown so the roadmap is visible, disabled so we aren't claiming it works. */}
+                  <button disabled title="Roadmap: inject a correction back into the agent. Not in this build.">
+                    Auto-correct
+                  </button>
+                </span>
+              </h2>
+              <div className="feed">
+                {entries.length === 0 && (
+                  <div className="empty">
+                    No steps yet. Run <code>python demo_agent.py</code> to start the pipeline.
+                  </div>
+                )}
+                {entries.map((e) => (
+                  <div key={e.sequence} className={"row " + e.status}>
+                    <div className="top">
+                      <span className={"pill " + e.status}>{e.status}</span>
+                      <span className="tool">{e.event.tool}</span>
+                      <span className="meta">
+                        {e.event.duration_ms}ms · verdict in {(e.verdict.latency_ms / 1000).toFixed(2)}s
+                      </span>
+                    </div>
+                    <div className={"why" + (e.verdict.degraded ? " degraded" : "")}>
+                      {e.verdict.explanation}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <footer>
+            Meta-agent: Claude Sonnet 5 · Codecrash · FRONTIER 2026 · VIT Chennai
+          </footer>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
