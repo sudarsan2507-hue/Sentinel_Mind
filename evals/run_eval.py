@@ -17,9 +17,11 @@ them.
 
 from __future__ import annotations
 
+import math
 import os
 import statistics
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -38,6 +40,27 @@ LABELS = [OK, WARN, ANOMALY]
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 
 
+def _percentile(sorted_values: list[float], q: float) -> float:
+    """Nearest-rank percentile: the smallest value at or above rank ceil(q*n).
+
+    The previous expression, ``values[int(n * 0.95) - 1]``, was off by one rank
+    and always in the flattering direction. On our 9 cases it returned index 7 --
+    the second-slowest verdict -- and reported it as p95. The real p95 of 9
+    samples is the slowest one.
+
+    That matters because the number goes on a slide. Understating our own tail
+    latency is the kind of error a judge is entitled to check, and "we quoted the
+    8th of 9" is not a defensible answer.
+
+    With n=9 this necessarily equals max(); the caller says so rather than
+    letting "p95" imply more samples than we have.
+    """
+    if not sorted_values:
+        return 0.0
+    rank = math.ceil(q * len(sorted_values))
+    return sorted_values[min(len(sorted_values), max(1, rank)) - 1]
+
+
 def main() -> int:
     if not os.environ.get("GROQ_API_KEY"):
         print(
@@ -51,7 +74,21 @@ def main() -> int:
     session = SessionContext(goal=GOAL)
 
     print(f"\nSentinelMind meta-agent eval -- model: {agent.model}")
-    print(f"{len(CASES)} labelled cases\n")
+    print(f"{len(CASES)} labelled cases")
+
+    # Pay the connection cold start before measuring, exactly as the server now
+    # does at boot. Left in, it landed entirely on case 1 and inflated the tail
+    # by ~6s -- a number that measured our TLS handshake, not our judgement.
+    # Reported rather than hidden: it is a real cost, just not a per-verdict one.
+    warm_started = time.perf_counter()
+    try:
+        agent.warm_up()
+        warm_ms = (time.perf_counter() - warm_started) * 1000
+        print(f"Cold start {warm_ms/1000:.2f}s (excluded below) -- format: "
+              f"{agent.structured_output_mode}\n")
+    except Exception as exc:  # noqa: BLE001
+        print(f"{YELLOW}Warm-up failed ({exc}).{RESET} Case 1 will carry the cold start.\n")
+
     print(f"{'case':<26} {'expected':<9} {'actual':<9} {'conf':<6} {'ms':<7} result")
     print("-" * 72)
 
@@ -95,11 +132,16 @@ def main() -> int:
     accuracy = hits / len(results)
     latencies = sorted(r["latency_ms"] for r in results)
     p50 = statistics.median(latencies)
-    p95 = latencies[max(0, int(len(latencies) * 0.95) - 1)]
+    p95 = _percentile(latencies, 0.95)
 
     print("\n" + "=" * 72)
-    print(f"Accuracy      {hits}/{len(results)}  ({accuracy:.0%})")
+    print(f"Accuracy      {hits}/{len(results)} on this labelled set  ({accuracy:.0%})")
     print(f"Latency       p50 {p50/1000:.2f}s   p95 {p95/1000:.2f}s   max {max(latencies)/1000:.2f}s")
+    if len(latencies) < 20:
+        print(
+            f"{DIM}              n={len(latencies)}, so p95 is the slowest sample. "
+            f"Quote it as such, not as a distribution.{RESET}"
+        )
     claim = "MET" if p95 < 3000 else "MISSED"
     colour = GREEN if p95 < 3000 else RED
     print(f"Sub-3s claim  {colour}{claim}{RESET} (p95 {p95/1000:.2f}s vs 3.00s target)")

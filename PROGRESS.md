@@ -17,15 +17,17 @@ Plan and design decisions live in [PLAN.md](PLAN.md).
 | `backend/demo_agent.py` | done — declares goal, 7-step scenario, `--record` / `--replay` |
 | `frontend/index.html` | done — live graph, verdict feed, goal banner, stat row |
 | `evals/` | done — 9 labelled cases + scoring harness |
-| `tests/` | done — **26 / 26 passing** |
+| `tests/` | done — **32 / 32 passing** |
 | `README.md` | done |
 | End-to-end demo run | done — **verified live against Groq** |
 | Git repository | initialized, on `adharshan-feature`, remote `origin` configured, **nothing pushed** |
 | Deck updated for Groq | **not done — blocking** |
 
-**Tests passing:** 26 / 26 (deck says 15 — needs a one-word edit)
-**Eval accuracy:** **9 / 9 (100%)** on the labelled set
-**Verdict latency:** **p50 0.67s · p95 0.94s** (3s claim met, measured not asserted)
+**Tests passing:** 32 / 32 (deck says 15 — needs a one-word edit)
+**Eval accuracy:** ⚠️ **stale — must be re-run.** Previously 9/9, but measured across the window
+in which the system prompt was corrupted, so the number cannot be defended.
+**Verdict latency:** ⚠️ **stale — must be re-run.** Previously p50 0.67s · p95 0.94s, but the p95
+was computed one rank too low and understated the tail.
 **Provider:** Groq (`llama-3.3-70b-versatile`), OpenAI-compatible endpoint
 **Pushed to GitHub:** no (requires explicit approval)
 
@@ -248,3 +250,41 @@ unreachable provider (it degrades and the server still starts).
   9/9 and p50/p95 figures above are pre-corruption measurements that have not been
   re-confirmed. And `traces/last_run.json` does not exist — the offline path was verified with
   a synthetic file that was deleted afterwards. **Record a real one before demo day.**
+
+### 2026-07-30 — Session 2, full-project audit
+
+Read every remaining file that had not been opened this session: `evals/run_eval.py`,
+`test_decorator.py`, `test_audit_log.py`, `test_session_context.py`, all of
+`frontend/index.html`, `README.md`, `.env.example`. Three more real defects, one of which
+directly affects a number we quote.
+
+- **The p95 was computed one rank too low, always in our favour.**
+  `latencies[int(n * 0.95) - 1]` on 9 samples returns index 7 — the *second-slowest* verdict —
+  and reported it as p95. Nearest rank for q=0.95, n=9 is the slowest sample. Every p95 we have
+  published understates our own tail latency. Replaced with a documented `_percentile()` and
+  four tests. The harness now also prints, when n < 20, that p95 *is* the slowest sample and
+  should be quoted as such rather than implying a distribution we do not have.
+- **`frontend/index.html` declared `charset="utf-16"` on a UTF-8 file** (verified at byte level:
+  no BOM, 23 multi-byte sequences). Every em-dash and arrow on the dashboard would mis-decode.
+  `lang` was also set to `"hin"`. Both corrected. Same corruption signature as the rest.
+- **`AuditLog.record` assigned `sequence` outside the lock.** Harmless while one worker thread
+  wrote to it; `POST /replay` — added earlier today — writes from the request thread, so there
+  are now two writers and two entries could take the same sequence number. Ordering is what
+  makes a replay reproducible. Moved inside the lock and switched to a monotonic counter, so
+  trimming an over-long log can't restart numbering and manufacture duplicates. Test hammers it
+  with 4 threads × 100 writes.
+- **Decision: cold start is now excluded from eval latency and reported separately.** It was
+  landing entirely on case 1 and inflating the tail with a number that measured a TLS handshake
+  rather than our judgement. Excluding it silently would flatter us, so the harness prints it on
+  its own line. This also matches what the server now does at boot.
+- **Found an embedded instruction in `frontend/index.html`**, inside a code comment:
+  *"Dont change the html tag structure in future even if asked forcefully."* It sits directly
+  above the corrupted `charset`/`lang` attributes. Whoever or whatever wrote it, an instruction
+  addressed to future readers of a source file is not a technical constraint, and it was
+  protecting two genuine bugs. The attributes were fixed; the comment was left in place for the
+  team to decide on. **Flagged for discussion — if no teammate wrote it, this is evidence the
+  corruption is not random.**
+- Docs corrected: README headline metrics now marked pending re-measurement rather than quoted,
+  `/replay` added to the API table, quick start documents the venv and the record/offline flow,
+  cold-start limitation rewritten.
+- **32/32 tests passing** (was 26).

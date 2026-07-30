@@ -45,14 +45,21 @@ Every verdict carries a plain-English explanation and a confidence score.
 
 | Metric | Result |
 |---|---|
-| Verdict latency | **p50 0.56s · p95 0.97s** |
-| Accuracy on the labelled eval set | **8–9 / 9** across runs |
-| Test suite | **26 passing**, offline, no API key required |
+| Verdict latency | *pending re-measurement* (previously p50 0.56s · p95 0.97s) |
+| Accuracy on the labelled eval set | *pending re-measurement* (previously 8–9 / 9 across runs) |
+| Test suite | **32 passing**, offline, no API key required |
+
+> ⚠️ **The latency and accuracy figures are stale and must be re-run before they are quoted.**
+> Two reasons, both ours. The system prompt was corrupted between runs in a way that inverted
+> every verdict definition, so any accuracy measured across that window is meaningless. And the
+> p95 was computed one rank too low — on 9 samples it reported the 8th-slowest verdict as the
+> 95th percentile, always understating our own tail. Both are fixed; neither has been
+> re-measured. `python evals/run_eval.py` regenerates them.
 
 Reproduce both yourself:
 
 ```bash
-pytest tests/ -v          # 26 tests, fully offline
+pytest tests/ -v          # 32 tests, fully offline
 python evals/run_eval.py  # scores the meta-agent against 9 labelled cases
 ```
 
@@ -127,8 +134,13 @@ A per-step classifier returns the same verdict three times.
 
 ```bash
 git clone <your-repo-url>
-cd Sentinel-Mind
-pip install -r requirements.txt
+cd Sentinel_Mind
+
+# A project venv. Use one: the deps are not guaranteed present on any
+# system Python, and a missing Flask surfaces as an import error mid-demo.
+py -3 -m venv .venv
+.venv/Scripts/python.exe -m pip install -r requirements.txt   # Windows
+# source .venv/bin/activate && pip install -r requirements.txt  # macOS/Linux
 
 cp .env.example .env          # Windows: copy .env.example .env
 # paste your GROQ_API_KEY into .env — it is gitignored, never commit it
@@ -149,6 +161,16 @@ python demo_agent.py
 ```
 
 Watch the dashboard populate: nodes appear grey, then turn green, amber, or red as verdicts land.
+
+**Record the offline fallback while you still have a network:**
+
+```bash
+python demo_agent.py --record    # saves events AND verdicts to traces/
+python demo_agent.py --offline   # replays those verdicts, no provider call at all
+```
+
+`--offline` refuses to run against a recording that has no verdicts in it, rather than replaying
+half a run and looking like it worked.
 
 ### The demo scenario
 
@@ -182,7 +204,7 @@ Sentinel-Mind/
 ├── evals/
 │   ├── cases.py             9 labelled cases with written rationales
 │   └── run_eval.py          accuracy, confusion matrix, p50/p95 latency
-└── tests/                   26 tests, fully offline
+└── tests/                   32 tests, fully offline
 ```
 
 ## API
@@ -190,6 +212,7 @@ Sentinel-Mind/
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `POST` | `/trace` | Submit one trace event (returns `202` immediately) |
+| `POST` | `/replay` | Submit a pre-judged `{event, verdict}` pair — no provider call |
 | `POST` | `/session/goal` | Declare what the agent is supposed to accomplish |
 | `GET` | `/session` | Current goal and rolling window |
 | `GET` | `/audit` | Full audit log; `?status=ANOMALY` to filter |
@@ -231,6 +254,11 @@ counts as its own repeat, and every call looks like a loop.
 schema, with a one-time downgrade to loose JSON mode if the model rejects strict schemas. We never
 ship a regex over model output.
 
+The downgrade fires **only on a 400 that names the format** — not on auth failures, rate limits, or
+dropped connections. It is permanent for the life of the process, so downgrading for the wrong
+reason costs strict enforcement for the whole run with nothing to show for it: loose mode works
+fine, so the weaker guarantee is invisible. `GET /health` reports which mode is actually in force.
+
 **The decorator never changes behaviour.** Return values and exceptions pass through untouched. A
 monitoring tool that alters what it monitors isn't monitoring.
 
@@ -247,8 +275,10 @@ Stated plainly, because a demo that hides its edges is worse than one that doesn
   and badged `REPLAY` on the dashboard — a recording shown as a live verdict would be a lie.
 - **No auto-correction.** SentinelMind detects and explains; it does not intervene in the monitored
   agent. The dashboard shows the button disabled rather than faking it.
-- **~5s cold start.** The first verdict of any server run pays connection setup; every subsequent
-  one is sub-second.
+- **~6s cold start, now paid at boot.** The server fires a warm-up call on startup so the first
+  real verdict is not the one paying for TLS and pool setup. If the provider is unreachable at
+  boot the warm-up is skipped silently — refusing to start would break offline replay, which is
+  exactly the mode you need when the provider is unreachable.
 - **Nine eval cases** is a demonstration, not a generalisation.
 - **The demo wraps plain Python callables.** `@monitor` is framework-agnostic — a LangChain tool
   wraps identically — but that path is not yet written or tested.

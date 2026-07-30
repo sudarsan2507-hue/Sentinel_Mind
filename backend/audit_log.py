@@ -25,18 +25,31 @@ class AuditLog:
     def __init__(self, max_entries: int = 10_000) -> None:
         self._entries: list[dict] = []
         self._lock = threading.Lock()
+        self._next_sequence = 0
         self.max_entries = max_entries
 
     def record(self, event: dict, verdict: dict) -> dict:
-        """Append one event/verdict pair. Returns the stored entry."""
-        entry = {
-            "sequence": len(self._entries),
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
-            "event": event,
-            "verdict": verdict,
-            "status": verdict.get("status", "WARN"),
-        }
+        """Append one event/verdict pair. Returns the stored entry.
+
+        ``sequence`` is assigned inside the lock. It used to be read from
+        ``len(self._entries)`` before acquiring it, which was safe only while a
+        single worker thread wrote here. ``POST /replay`` writes from the request
+        thread, so there are now two writers and that read was a race: two
+        entries could take the same sequence number, and the audit log's ordering
+        is the thing that makes a replay reproducible.
+
+        A monotonic counter rather than ``len()`` so that trimming an over-long
+        log doesn't restart numbering and silently create duplicate sequences.
+        """
         with self._lock:
+            entry = {
+                "sequence": self._next_sequence,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "event": event,
+                "verdict": verdict,
+                "status": verdict.get("status", "WARN"),
+            }
+            self._next_sequence += 1
             self._entries.append(entry)
             # Bound memory on a long-running session; drop oldest first.
             if len(self._entries) > self.max_entries:
@@ -81,9 +94,10 @@ class AuditLog:
         )
 
     def clear(self) -> None:
-        """Drop every entry."""
+        """Drop every entry and restart numbering -- a clear starts a new run."""
         with self._lock:
             self._entries.clear()
+            self._next_sequence = 0
 
     def __len__(self) -> int:
         with self._lock:

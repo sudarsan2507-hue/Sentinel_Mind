@@ -201,10 +201,11 @@ sentinelmind/
 
 ---
 
-## 7. Test plan — 26 tests
+## 7. Test plan — 32 tests
 
-> The deck says 15. It is now 26 — session-context logic, the offline replay path, the
-> structured-output downgrade rules, and a prompt-integrity guard. One-word slide edit.
+> The deck says 15. It is now 32 — session-context logic, the offline replay path, the
+> structured-output downgrade rules, a prompt-integrity guard, audit-log concurrency, and the
+> eval harness's percentile maths. One-word slide edit.
 
 **test_decorator.py (4)** — calls the original function; emits a trace event; captures errors;
 records duration.
@@ -231,6 +232,13 @@ verdict.
 **test_audit_log.py (5)** — records an entry; filters anomalies; exports valid JSON; clears the log;
 handles multiple records.
 
+
+**test_audit_log.py (7)** — the original five, plus: sequence numbers stay unique under
+concurrent writers (there are two now — the meta-agent worker and `POST /replay`), and `clear()`
+restarts numbering.
+
+**test_eval_harness.py (4)** — nearest-rank percentile maths, because the numbers this file
+produces are the numbers we say out loud.
 
 ### Evals — separate from tests, and the stronger claim
 

@@ -61,6 +61,40 @@ def test_clears_log(sample_event):
     assert log.summary()["total"] == 0
 
 
+def test_sequence_is_unique_under_concurrent_writers(sample_event):
+    """Two threads write here now: the meta-agent worker and POST /replay.
+
+    Sequence used to be read outside the lock, so two entries could take the
+    same number. Ordering is what makes a replay reproducible, so a duplicate
+    sequence quietly corrupts the record.
+    """
+    import threading
+
+    log = AuditLog()
+
+    def hammer():
+        for _ in range(100):
+            log.record(sample_event, _verdict("OK"))
+
+    threads = [threading.Thread(target=hammer) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    sequences = [e["sequence"] for e in log.all()]
+    assert len(sequences) == 400
+    assert len(set(sequences)) == 400, "duplicate sequence numbers"
+
+
+def test_clear_restarts_sequence_numbering(sample_event):
+    log = AuditLog()
+    log.record(sample_event, _verdict("OK"))
+    log.clear()
+
+    assert log.record(sample_event, _verdict("OK"))["sequence"] == 0
+
+
 def test_handles_multiple_records(sample_event):
     log = AuditLog()
     for i in range(50):
