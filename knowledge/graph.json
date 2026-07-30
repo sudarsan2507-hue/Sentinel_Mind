@@ -1,0 +1,163 @@
+{
+  "updated_at": "2026-07-30T12:29:52.194880+00:00",
+  "runs": 1,
+  "nodes": [
+    {
+      "type": "tool",
+      "id": "fetch_pricing",
+      "count": 4,
+      "first_seen": "2026-07-30T12:29:49.082871+00:00",
+      "last_verdict": "ANOMALY",
+      "last_seen": "2026-07-30T12:29:51.826339+00:00"
+    },
+    {
+      "type": "failure_mode",
+      "id": "goal_drift",
+      "count": 2,
+      "first_seen": "2026-07-30T12:29:49.082913+00:00",
+      "last_seen": "2026-07-30T12:29:50.511482+00:00"
+    },
+    {
+      "type": "tool",
+      "id": "summarize",
+      "count": 1,
+      "first_seen": "2026-07-30T12:29:49.388365+00:00",
+      "last_verdict": "WARN",
+      "last_seen": "2026-07-30T12:29:49.388365+00:00"
+    },
+    {
+      "type": "failure_mode",
+      "id": "inefficient_reasoning",
+      "count": 1,
+      "first_seen": "2026-07-30T12:29:49.388398+00:00",
+      "last_seen": "2026-07-30T12:29:49.388398+00:00"
+    },
+    {
+      "type": "tool",
+      "id": "delete_user_record",
+      "count": 1,
+      "first_seen": "2026-07-30T12:29:49.778369+00:00",
+      "last_verdict": "ANOMALY",
+      "last_seen": "2026-07-30T12:29:49.778369+00:00"
+    },
+    {
+      "type": "failure_mode",
+      "id": "hallucinated_tool",
+      "count": 2,
+      "first_seen": "2026-07-30T12:29:49.778401+00:00",
+      "last_seen": "2026-07-30T12:29:52.194812+00:00"
+    },
+    {
+      "type": "capability",
+      "id": "delete_records",
+      "count": 1,
+      "first_seen": "2026-07-30T12:29:49.778422+00:00",
+      "available": false,
+      "last_seen": "2026-07-30T12:29:49.778422+00:00"
+    },
+    {
+      "type": "goal",
+      "id": "Answer a customer's question about whether their refund window has expired, using the documentation and their account record.",
+      "count": 2,
+      "first_seen": "2026-07-30T12:29:49.778442+00:00",
+      "last_seen": "2026-07-30T12:29:52.194859+00:00"
+    },
+    {
+      "type": "failure_mode",
+      "id": "infinite_loop",
+      "count": 2,
+      "first_seen": "2026-07-30T12:29:51.286529+00:00",
+      "last_seen": "2026-07-30T12:29:51.826367+00:00"
+    },
+    {
+      "type": "tool",
+      "id": "flaky_api",
+      "count": 1,
+      "first_seen": "2026-07-30T12:29:52.194781+00:00",
+      "last_verdict": "ANOMALY",
+      "last_seen": "2026-07-30T12:29:52.194781+00:00"
+    },
+    {
+      "type": "capability",
+      "id": "an_unrecognised_capability",
+      "count": 1,
+      "first_seen": "2026-07-30T12:29:52.194835+00:00",
+      "available": false,
+      "last_seen": "2026-07-30T12:29:52.194835+00:00"
+    }
+  ],
+  "edges": [
+    {
+      "src_type": "tool",
+      "src_id": "fetch_pricing",
+      "relation": "exhibits",
+      "dst_type": "failure_mode",
+      "dst_id": "goal_drift",
+      "count": 2
+    },
+    {
+      "src_type": "tool",
+      "src_id": "summarize",
+      "relation": "exhibits",
+      "dst_type": "failure_mode",
+      "dst_id": "inefficient_reasoning",
+      "count": 1
+    },
+    {
+      "src_type": "tool",
+      "src_id": "delete_user_record",
+      "relation": "exhibits",
+      "dst_type": "failure_mode",
+      "dst_id": "hallucinated_tool",
+      "count": 1
+    },
+    {
+      "src_type": "tool",
+      "src_id": "delete_user_record",
+      "relation": "requires",
+      "dst_type": "capability",
+      "dst_id": "delete_records",
+      "count": 1
+    },
+    {
+      "src_type": "capability",
+      "src_id": "delete_records",
+      "relation": "missing_in",
+      "dst_type": "goal",
+      "dst_id": "Answer a customer's question about whether their refund window has expired, using the documentation and their account record.",
+      "count": 1
+    },
+    {
+      "src_type": "tool",
+      "src_id": "fetch_pricing",
+      "relation": "exhibits",
+      "dst_type": "failure_mode",
+      "dst_id": "infinite_loop",
+      "count": 2
+    },
+    {
+      "src_type": "tool",
+      "src_id": "flaky_api",
+      "relation": "exhibits",
+      "dst_type": "failure_mode",
+      "dst_id": "hallucinated_tool",
+      "count": 1
+    },
+    {
+      "src_type": "tool",
+      "src_id": "flaky_api",
+      "relation": "requires",
+      "dst_type": "capability",
+      "dst_id": "an_unrecognised_capability",
+      "count": 1
+    },
+    {
+      "src_type": "capability",
+      "src_id": "an_unrecognised_capability",
+      "relation": "missing_in",
+      "dst_type": "goal",
+      "dst_id": "Answer a customer's question about whether their refund window has expired, using the documentation and their account record.",
+      "count": 1
+    }
+  ]
+}
