@@ -1,0 +1,10 @@
+# Experiment artifacts land here, one timestamped pair per run:
+#
+#   learning_2026-07-30_14-42-18.json   full structure
+#   learning_2026-07-30_14-42-18.csv    flat rows for plotting
+#
+# Results are committed on purpose. A measurement nobody can find later is a
+# measurement that has to be paid for again, and the free tier has a daily cap.
+#
+# Every artifact carries an `outcome` field. INVALID runs are written too --
+# knowing the provider was rate limited at a given time is context, not noise.

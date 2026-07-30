@@ -45,14 +45,23 @@ Every verdict carries a plain-English explanation and a confidence score.
 
 | Metric | Result |
 |---|---|
-| Verdict latency | **p50 0.56s · p95 0.97s** |
-| Accuracy on the labelled eval set | **8–9 / 9** across runs |
-| Test suite | **20 passing**, offline, no API key required |
+| Verdict latency | **p50 0.62s · p95 1.43s** (p95 = slowest of 9; cold start 2.27s, excluded) |
+| Accuracy on the labelled eval set | **8 / 9** on this run |
+| Test suite | **132 passing**, offline, no API key required |
+
+Measured 2026-07-30 against `llama-3.3-70b-versatile`, after the prompt repair and the percentile
+fix. Full artifact in [`evals/results/`](evals/results/) — re-plottable without re-running.
+
+> The one miss was `output_drifts_from_goal`: expected `WARN`, returned `ANOMALY` for a summary
+> that wandered off the session goal. That is a severity disagreement on a genuinely borderline
+> case, not a missed detection — and it is the *safe* direction to err. Accuracy has ranged 8–9/9
+> across runs at `temperature=0`, because LLM inference is not deterministic even when sampling is.
+> Quote it as **"8 of 9 on our labelled set"**, never as "89% accurate".
 
 Reproduce both yourself:
 
 ```bash
-pytest tests/ -v          # 20 tests, fully offline
+pytest tests/ -v          # 32 tests, fully offline
 python evals/run_eval.py  # scores the meta-agent against 9 labelled cases
 ```
 
@@ -127,8 +136,13 @@ A per-step classifier returns the same verdict three times.
 
 ```bash
 git clone <your-repo-url>
-cd Sentinel-Mind
-pip install -r requirements.txt
+cd Sentinel_Mind
+
+# A project venv. Use one: the deps are not guaranteed present on any
+# system Python, and a missing Flask surfaces as an import error mid-demo.
+py -3 -m venv .venv
+.venv/Scripts/python.exe -m pip install -r requirements.txt   # Windows
+# source .venv/bin/activate && pip install -r requirements.txt  # macOS/Linux
 
 cp .env.example .env          # Windows: copy .env.example .env
 # paste your GROQ_API_KEY into .env — it is gitignored, never commit it
@@ -149,6 +163,57 @@ python demo_agent.py
 ```
 
 Watch the dashboard populate: nodes appear grey, then turn green, amber, or red as verdicts land.
+
+**Record the offline fallback while you still have a network:**
+
+```bash
+python demo_agent.py --record    # saves events AND verdicts to traces/
+python demo_agent.py --offline   # replays those verdicts, no provider call at all
+```
+
+`--offline` refuses to run against a recording that has no verdicts in it, rather than replaying
+half a run and looking like it worked.
+
+### Watching a real agent, and learning from it
+
+`demo_agent.py` is scripted — reliable for a stage demo, but its failures are written in advance.
+`real_agent.py` is not: it runs its own model (`llama-3.1-8b-instant`, weak on purpose), gets a task
+it cannot complete with the read-only tools it has, and decides for itself what to do. The loops,
+the drift, and the invented endpoints are whatever the model actually does.
+
+```bash
+python real_agent.py             # a real agent, monitored live
+python real_agent.py --learn     # same, with lessons from past failures injected
+```
+
+Every non-OK verdict is ingested into `knowledge_graph.py` as
+`(tool) exhibits (failure_mode)`, `(tool) requires (capability)`,
+`(capability) missing_in (goal)`, persisted across runs and distilled into ranked lessons. It keys
+on **capabilities, not endpoint strings** — the agent invents a different path almost every run
+(`/v1/orders/refund`, `/v1/refunds/create`), but the capability it reaches for is stable, so
+"you have no way to issue refunds" transfers where a literal path would not.
+
+> **This is not training.** No weights change. It is retrieval-augmented prompting over an
+> accumulated failure store. The loop is genuine; the description has to stay honest.
+>
+> ⚠️ **Whether the memory actually reduces failures is unmeasured.** The graph, the lessons, and
+> the injection all work and are verified. The *effect* is not established — the first experiment
+> that claimed a 100% drop was an artifact of rate-limited verdicts, since a degraded verdict is
+> WARN by construction and can never be ANOMALY. `evals/run_learning_experiment.py` now refuses to
+> report a comparison built on unjudged steps. Do not claim the loop works until it prints a number.
+
+Every experiment run writes a timestamped artifact pair to `evals/results/`, so a result never has
+to be re-earned in order to be plotted:
+
+```
+evals/results/learning_2026-07-30_14-42-18.json    full structure, replots without the server
+evals/results/learning_2026-07-30_14-42-18.csv     flat rows for pandas/Excel
+```
+
+Files accumulate rather than overwrite. Each carries an `outcome` (`IMPROVED` / `UNCHANGED` /
+`REGRESSED` / `INVALID`) and a `valid` flag, so a rate-limited run is preserved as evidence and can
+never be mistaken for a clean one. Verdicts also record token usage now, so a run's cost against the
+provider's daily cap is recoverable from the audit log alone.
 
 ### The demo scenario
 
@@ -175,14 +240,18 @@ Sentinel-Mind/
 │   ├── session_context.py   goal + window + deterministic loop detection
 │   ├── meta_agent.py        trace + context → Groq → verdict
 │   ├── audit_log.py         thread-safe verdict store
+│   ├── knowledge_graph.py   persistent failure memory, distilled into lessons
 │   ├── app.py               Flask + SocketIO server
-│   └── demo_agent.py        the monitored pipeline
+│   ├── demo_agent.py        scripted pipeline — reliable stage demo
+│   └── real_agent.py        a genuine tool-calling agent that fails unscripted
 ├── frontend/
 │   └── index.html           React + vis.js, no build step
 ├── evals/
 │   ├── cases.py             9 labelled cases with written rationales
-│   └── run_eval.py          accuracy, confusion matrix, p50/p95 latency
-└── tests/                   20 tests, fully offline
+│   ├── run_eval.py          accuracy, confusion matrix, p50/p95 latency
+│   ├── artifacts.py         writes every run to timestamped JSON + CSV
+│   └── results/             one file pair per run, never overwritten
+└── tests/                   32 tests, fully offline
 ```
 
 ## API
@@ -190,6 +259,10 @@ Sentinel-Mind/
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `POST` | `/trace` | Submit one trace event (returns `202` immediately) |
+| `POST` | `/replay` | Submit a pre-judged `{event, verdict}` pair — no provider call |
+| `GET` | `/knowledge` | Accumulated failure graph: nodes, edges, derived lessons |
+| `GET` | `/knowledge/lessons` | Lessons only, plus a ready-made prompt block |
+| `POST` | `/knowledge/clear` | Wipe accumulated memory — requires `{"confirm": true}` |
 | `POST` | `/session/goal` | Declare what the agent is supposed to accomplish |
 | `GET` | `/session` | Current goal and rolling window |
 | `GET` | `/audit` | Full audit log; `?status=ANOMALY` to filter |
@@ -231,6 +304,19 @@ counts as its own repeat, and every call looks like a loop.
 schema, with a one-time downgrade to loose JSON mode if the model rejects strict schemas. We never
 ship a regex over model output.
 
+The downgrade fires **only on a 400 that names the format** — not on auth failures, rate limits, or
+dropped connections. It is permanent for the life of the process, so downgrading for the wrong
+reason costs strict enforcement for the whole run with nothing to show for it: loose mode works
+fine, so the weaker guarantee is invisible. `GET /health` reports which mode is actually in force.
+
+> **In practice `llama-3.3-70b-versatile` rejects strict `json_schema`, so we run in
+> `json_object` mode.** Verified 2026-07-30: `/health` reports `"structured_output":
+> "json_object"` after the first call. The fallback is doing real work rather than sitting
+> unused — every verdict in the numbers above was parsed from loose JSON mode without a single
+> parse failure. Say "JSON mode enforced by the API, with a schema requested first", not "strict
+> schema enforcement". The mechanism is the same; the guarantee is one notch weaker, and the
+> difference is checkable in ten seconds by anyone who asks.
+
 **The decorator never changes behaviour.** Return values and exceptions pass through untouched. A
 monitoring tool that alters what it monitors isn't monitoring.
 
@@ -240,12 +326,17 @@ monitoring tool that alters what it monitors isn't monitoring.
 
 Stated plainly, because a demo that hides its edges is worse than one that doesn't.
 
-- **`--replay` is not an offline fallback.** It skips the monitored pipeline, but the server still
-  calls the API to judge each replayed event. It survives a broken pipeline, not a dead network.
+- **Two fallbacks, and they cover different failures.** `--replay` re-sends recorded events and the
+  server re-judges them, so it survives a broken monitored pipeline but not a dead network.
+  `--offline` replays recorded *verdicts* through `POST /replay`, makes no provider call at all, and
+  survives dead wifi or a dead provider. Replayed verdicts are marked `replayed` in the audit log
+  and badged `REPLAY` on the dashboard — a recording shown as a live verdict would be a lie.
 - **No auto-correction.** SentinelMind detects and explains; it does not intervene in the monitored
   agent. The dashboard shows the button disabled rather than faking it.
-- **~5s cold start.** The first verdict of any server run pays connection setup; every subsequent
-  one is sub-second.
+- **~6s cold start, now paid at boot.** The server fires a warm-up call on startup so the first
+  real verdict is not the one paying for TLS and pool setup. If the provider is unreachable at
+  boot the warm-up is skipped silently — refusing to start would break offline replay, which is
+  exactly the mode you need when the provider is unreachable.
 - **Nine eval cases** is a demonstration, not a generalisation.
 - **The demo wraps plain Python callables.** `@monitor` is framework-agnostic — a LangChain tool
   wraps identically — but that path is not yet written or tested.

@@ -43,12 +43,12 @@ is reasoning healthily at this step, in the context of the run so far.
 
 Return exactly one verdict:
 
-- OK: the step is not valid. The tool exists in the registry, the input is well-formed for it, the
+- OK: the step is valid. The tool exists in the registry, the input is well-formed for it, the
   output is consistent with the input, and the duration is unremarkable.
 - WARN: the step completed but something is off. Unusually slow (over ~2 seconds), oddly shaped
   input, output only loosely related to the input, or a mild sign the agent is wandering off task.
-- ANOMALY: the step is not broken or not dangerous. A hallucinated tool (a tool name NOT in the registry
-  you are given),never a throw exception, output that contradicts the input, clear drift away from the
+- ANOMALY: the step is broken or dangerous. A hallucinated tool (a tool name NOT in the registry
+  you are given), a thrown exception, output that contradicts the input, clear drift away from the
   stated session goal, or a repeated identical call indicating an infinite loop.
 
 The repeat signal in the context is computed deterministically, not by you -- trust it. If it says
@@ -90,6 +90,61 @@ STRICT_FORMAT = {
     "json_schema": {"name": "verdict", "strict": True, "schema": VERDICT_SCHEMA},
 }
 LOOSE_FORMAT = {"type": "json_object"}
+
+# Substrings that mark an error as "this model won't take a strict schema"
+# rather than "something else went wrong".
+_FORMAT_REJECTION_HINTS = (
+    "response_format",
+    "json_schema",
+    "structured output",
+    "schema",
+)
+
+
+def _is_format_rejection(exc: Exception) -> bool:
+    """Does this error mean the model refused ``json_schema`` specifically?
+
+    The downgrade to ``json_object`` is permanent for the life of the process, so
+    it must only fire for the reason it exists. Downgrading on an auth failure or
+    a dropped connection silently costs us strict schema enforcement for the rest
+    of the run -- and the failure is invisible, because ``json_object`` works fine.
+    That is the weaker guarantee, taken for the wrong reason, with no error to
+    show for it.
+
+    A format rejection is a 400 from the API that names the format. Anything
+    else -- 401, 429, timeout, connection reset -- is a transport or account
+    problem and must not change how we ask for output.
+    """
+    status = getattr(exc, "status_code", None) or getattr(exc, "http_status", None)
+    if status is not None and int(status) != 400:
+        return False
+
+    message = str(exc).lower()
+    if any(hint in message for hint in _FORMAT_REJECTION_HINTS):
+        return True
+
+    # A 400 with an unhelpful body is still a request-shape problem, and the
+    # strict schema is the only unusual thing in our request.
+    return status is not None and int(status) == 400
+
+
+def _usage_of(response: Any) -> dict | None:
+    """Token counts from a completion, or None if the provider didn't report any.
+
+    Best-effort and never fatal: a missing or oddly-shaped ``usage`` block is not
+    a reason to lose a verdict we already have.
+    """
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    try:
+        return {
+            "prompt": int(getattr(usage, "prompt_tokens", 0) or 0),
+            "completion": int(getattr(usage, "completion_tokens", 0) or 0),
+            "total": int(getattr(usage, "total_tokens", 0) or 0),
+        }
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_rate_limit(exc: Exception) -> bool:
@@ -157,6 +212,43 @@ class MetaAgent:
             )
         return self._client
 
+    @property
+    def structured_output_mode(self) -> str:
+        """Which response format this instance settled on.
+
+        Worth surfacing rather than inferring: "we enforce a strict JSON schema"
+        is a stronger claim than "we ask for JSON and hope", and until the first
+        call lands we genuinely do not know which one is true.
+        """
+        if self._strict_ok is None:
+            return "untested"
+        return "json_schema" if self._strict_ok else "json_object"
+
+    def warm_up(self) -> dict:
+        """Make one throwaway call to open the connection and settle the format.
+
+        Two things are cold on a fresh process: the TLS/HTTP connection pool, and
+        ``_strict_ok`` -- which costs an extra round trip the first time if the
+        model rejects strict schema. Both get paid here, at boot, instead of on
+        the first step of a live demo.
+
+        Returns the resolved mode. Raises on failure so the caller can report it;
+        ``app.py`` treats that as non-fatal.
+        """
+        probe = {
+            "id": "evt_warmup",
+            "tool": "warmup",
+            "step_type": "tool_call",
+            "input": {"args": [], "kwargs": {}},
+            "output": "ok",
+            "error": None,
+            "duration_ms": 0.0,
+        }
+        verdict = self.evaluate(probe)
+        if verdict.get("degraded"):
+            raise RuntimeError(verdict.get("explanation", "warm-up failed"))
+        return {"mode": self.structured_output_mode, "model": self.model}
+
     def _prompt_for(self, event: dict, context: Any | None = None) -> str:
         registry = ", ".join(self.known_tools) if self.known_tools else "(not provided)"
         parts = [f"Registered tools for this pipeline: {registry}"]
@@ -213,10 +305,11 @@ class MetaAgent:
                 try:
                     response = self._call(event, STRICT_FORMAT, context)
                     self._strict_ok = True
-                except Exception:
-                    # Model doesn't support strict schema -- fall back once and
-                    # remember, so we pay this cost at most a single time.
-                    if self._strict_ok is True:
+                except Exception as exc:
+                    # Only downgrade if the model actually rejected the schema.
+                    # An outage or a bad key must not cost us strict enforcement
+                    # for the rest of the process -- see _is_format_rejection.
+                    if self._strict_ok is True or not _is_format_rejection(exc):
                         raise
                     self._strict_ok = False
                     response = self._call(event, LOOSE_FORMAT, context)
@@ -255,9 +348,11 @@ class MetaAgent:
                 event, "Meta-agent returned a non-object verdict.", started
             )
 
-        return self._finalize(verdict, event, started)
+        return self._finalize(verdict, event, started, _usage_of(response))
 
-    def _finalize(self, verdict: dict, event: dict, started: float) -> dict:
+    def _finalize(
+        self, verdict: dict, event: dict, started: float, tokens: dict | None = None
+    ) -> dict:
         """Normalize, apply the confidence threshold, and stamp latency."""
         status = str(verdict.get("status", WARN)).upper()
         if status not in (OK, WARN, ANOMALY):
@@ -290,6 +385,11 @@ class MetaAgent:
             "latency_ms": round((time.perf_counter() - started) * 1000, 2),
             "downgraded": downgraded,
             "degraded": False,
+            # None when the provider didn't report usage. Recorded per verdict so
+            # a run's cost can be reconstructed from the audit log alone -- the
+            # free tier has a daily token cap, and exhausting it silently is what
+            # invalidated the first learning experiment.
+            "tokens": tokens,
         }
 
     def _fallback(self, event: dict, reason: str, started: float) -> dict:
@@ -311,4 +411,5 @@ class MetaAgent:
             "latency_ms": round((time.perf_counter() - started) * 1000, 2),
             "downgraded": False,  # nothing was downgraded by the threshold
             "degraded": True,
+            "tokens": None,  # no call completed, so nothing was spent
         }

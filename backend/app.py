@@ -1,6 +1,7 @@
 """SentinelMind server: ingests trace events, judges them, streams verdicts.
 
     POST /trace          a monitored agent submits one trace event
+    POST /replay         a pre-judged event/verdict pair, no API call (offline mode)
     GET  /health         liveness probe
     GET  /audit          the structured audit log
     GET  /audit/export   the log as a downloadable JSON file
@@ -125,6 +126,10 @@ def create_app(
                 "status": "ok",
                 "service": "sentinelmind",
                 "model": app.config["META_AGENT"].model,
+                # "untested" until the first call lands. Surfaced so you know
+                # whether you are demoing strict schema enforcement or the
+                # weaker json_object fallback.
+                "structured_output": app.config["META_AGENT"].structured_output_mode,
                 "events_logged": len(app.config["AUDIT_LOG"]),
             }
         ), 200
@@ -139,6 +144,40 @@ def create_app(
         socketio.emit("trace", event)  # draw the node immediately, grey
         work.put(event)
         return jsonify({"accepted": True, "event_id": event.get("id")}), 202
+
+    @app.post("/replay")
+    def replay_entry():
+        """Accept a pre-judged event/verdict pair and push it straight through.
+
+        This is the true offline fallback. ``/trace`` queues an event for the
+        meta-agent, which means it needs the API to be reachable -- exactly the
+        thing that fails when the venue wifi dies. This path skips the meta-agent
+        entirely and replays a verdict recorded earlier, so a demo survives a dead
+        network or a dead provider.
+
+        The verdict is stamped ``replayed: true`` so the dashboard can say so.
+        Passing off a recorded verdict as a live one would be dishonest, and the
+        audit log is supposed to be the record of truth.
+        """
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "expected an object with 'event' and 'verdict'"}), 400
+
+        event = payload.get("event")
+        verdict = payload.get("verdict")
+        if not isinstance(event, dict) or not isinstance(verdict, dict):
+            return jsonify({"error": "'event' and 'verdict' must both be objects"}), 400
+
+        verdict = {**verdict, "replayed": True}
+
+        socketio.emit("trace", event)
+        # Record into the session window too, so /session stays coherent during a
+        # replay and a subsequent live step sees the right history.
+        app.config["SESSION"].record(event, verdict)
+        entry = app.config["AUDIT_LOG"].record(event, verdict)
+        socketio.emit("verdict", entry)
+        socketio.emit("summary", app.config["AUDIT_LOG"].summary())
+        return jsonify({"replayed": True, "event_id": event.get("id")}), 202
 
     @app.post("/session/goal")
     def set_goal():
@@ -192,7 +231,21 @@ def create_app(
 
     @app.post("/knowledge/clear")
     def knowledge_clear():
-        """Reset accumulated memory -- needed to measure a cold baseline."""
+        """Reset accumulated memory -- needed to measure a cold baseline.
+
+        Requires ``{"confirm": true}``. Unlike ``/audit/clear``, which drops one
+        run's verdicts, this deletes the graph file and every lesson learned
+        across all previous runs -- memory that costs real tokens to rebuild, and
+        that the free tier's daily cap makes expensive to rebuild twice. An
+        explicit flag means a stray POST, or a dashboard button wired without
+        thinking, cannot silently erase it.
+        """
+        payload = request.get_json(silent=True) or {}
+        if payload.get("confirm") is not True:
+            return jsonify(
+                {"error": "expected {\"confirm\": true} -- this deletes all accumulated memory"}
+            ), 400
+
         app.config["KNOWLEDGE"].clear()
         socketio.emit("knowledge_cleared", {})
         return jsonify({"cleared": True}), 200
@@ -255,7 +308,28 @@ def create_app(
 app, socketio = create_app()
 
 
+def _warm_up() -> None:
+    """Open the connection to the provider before the first real step arrives.
+
+    The first verdict of any run took ~6s while TLS and the HTTP pool were set
+    up; every later one was under a second. On stage that meant the first node
+    sat grey conspicuously longer than the rest. Doing it at boot moves that cost
+    somewhere nobody is watching.
+
+    Failure here is deliberately silent: a warm-up that can't reach the provider
+    is not a reason to refuse to start. Offline replay mode needs the server up
+    precisely when the API is unreachable.
+    """
+    try:
+        app.config["META_AGENT"].warm_up()
+        print("Provider connection warmed.")
+    except Exception as exc:  # noqa: BLE001 - best effort, never fatal
+        print(f"Warm-up skipped ({type(exc).__name__}). Offline replay still works.")
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"SentinelMind watching on http://127.0.0.1:{port}")
+    # Off the main thread so the server accepts connections immediately.
+    threading.Thread(target=_warm_up, daemon=True, name="sentinel-warmup").start()
     socketio.run(app, host="127.0.0.1", port=port, allow_unsafe_werkzeug=True)
