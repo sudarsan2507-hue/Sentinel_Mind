@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from typing import Any
 
@@ -156,7 +157,12 @@ def _is_rate_limit(exc: Exception) -> bool:
 
 
 def _retry_after(exc: Exception, default: float) -> float:
-    """Honour the server's Retry-After header when it gives us one."""
+    """How long the server says to wait, in seconds, or ``default``.
+
+    Reads the Retry-After header first, then falls back to parsing the wait out
+    of the message body -- Groq puts it there as "Please try again in 9m37.152s"
+    on daily-cap errors, where the header is often absent.
+    """
     response = getattr(exc, "response", None)
     headers = getattr(response, "headers", None) or {}
     for key in ("retry-after", "Retry-After", "x-ratelimit-reset-requests"):
@@ -166,6 +172,12 @@ def _retry_after(exc: Exception, default: float) -> float:
                 return float(str(raw).rstrip("s"))
             except ValueError:
                 continue
+
+    match = re.search(r"try again in (?:(\d+)m)?([\d.]+)s", str(exc))
+    if match:
+        minutes = float(match.group(1) or 0)
+        return minutes * 60 + float(match.group(2))
+
     return default
 
 
@@ -190,12 +202,17 @@ class MetaAgent:
         confidence_threshold: float = 0.0,
         model: str = MODEL,
         rate_limit_retries: int = 3,
+        max_backoff: float = 5.0,
     ) -> None:
         self._client = client
         self.known_tools = known_tools or []
         self.confidence_threshold = confidence_threshold
         self.model = model
         self.rate_limit_retries = rate_limit_retries
+        # Longest single sleep we will accept on a 429. Judging is single-threaded,
+        # so this is also the longest the whole queue stalls per event. Kept small
+        # deliberately: a short burst is worth waiting out, a daily cap is not.
+        self.max_backoff = max_backoff
         # None = untested, True = model accepts json_schema, False = downgraded.
         self._strict_ok: bool | None = None
 
@@ -258,12 +275,18 @@ class MetaAgent:
         return "\n\n".join(parts)
 
     def _call(self, event: dict, response_format: dict, context: Any | None) -> Any:
-        """One judging call, with backoff on rate limits.
+        """One judging call, with bounded backoff on rate limits.
 
-        A 429 is transient, not a failure -- degrading to WARN on the first one
-        silently blinds the monitor for the rest of a burst, and because degraded
-        verdicts can never be ANOMALY, it makes a rate-limited run look healthy.
-        That is a far worse outcome than waiting a second.
+        A short burst limit is worth waiting out: degrading on the first 429
+        blinds the monitor for the rest of the burst, and because degraded
+        verdicts can never be ANOMALY, a rate-limited run then looks healthy.
+
+        A long limit is the opposite. Judging runs on one worker thread, so every
+        second spent sleeping is a second the whole queue is stalled. Retrying a
+        wait we cannot outlast costs ``max_backoff x retries`` per event and fails
+        anyway -- 90s each, observed, which froze a 13-step run at one verdict.
+        So when the server tells us the wait exceeds our budget, give up
+        immediately and let the verdict degrade fast with the reason attached.
         """
         attempts = self.rate_limit_retries + 1
         for attempt in range(attempts):
@@ -281,7 +304,12 @@ class MetaAgent:
             except Exception as exc:
                 if not _is_rate_limit(exc) or attempt == attempts - 1:
                     raise
-                time.sleep(min(_retry_after(exc, default=2.0 * (attempt + 1)), 30.0))
+                wait = _retry_after(exc, default=2.0 * (attempt + 1))
+                if wait > self.max_backoff:
+                    # Longer than we are willing to stall the queue for. Sleeping
+                    # would burn the budget and still fail.
+                    raise
+                time.sleep(wait)
         raise RuntimeError("unreachable")  # pragma: no cover
 
     def evaluate(self, event: dict, context: Any | None = None) -> dict:
