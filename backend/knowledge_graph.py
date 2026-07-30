@@ -54,6 +54,11 @@ GOAL_DRIFT = "goal_drift"
 EXCEPTION = "exception"
 INEFFICIENT = "inefficient_reasoning"
 
+# Returned when no keyword matches. Deliberately a sentinel rather than a guess:
+# inventing a capability name for an unmatched tool would put a fact in the
+# lessons that was never observed. Lesson text special-cases it -- see lessons().
+UNRECOGNISED_CAPABILITY = "an_unrecognised_capability"
+
 # Capability keywords -> canonical capability. Matched against the tool name and
 # endpoint path, longest-token-first so "refund-status" lands on refund.
 CAPABILITY_PATTERNS: list[tuple[str, str]] = [
@@ -73,7 +78,7 @@ def classify_capability(tool_name: str) -> str:
     for pattern, capability in CAPABILITY_PATTERNS:
         if re.search(pattern, haystack):
             return capability
-    return "an_unrecognised_capability"
+    return UNRECOGNISED_CAPABILITY
 
 
 def classify_failure(event: dict, verdict: dict, known_tools: list[str]) -> str:
@@ -208,6 +213,14 @@ class KnowledgeGraph:
             failure_key = self._touch("failure_mode", failure)
             self._edges[(tool_key, "exhibits", failure_key)] += 1
 
+            # classify_failure returns a single primary mode, but a step can
+            # exhibit more than one. An unregistered tool that also raised is
+            # both a hallucination and an exception; recording only the winner
+            # loses a fact the graph is meant to hold.
+            if event.get("error") and failure != EXCEPTION:
+                also_key = self._touch("failure_mode", EXCEPTION)
+                self._edges[(tool_key, "exhibits", also_key)] += 1
+
             # Only hallucinated tools imply a missing capability. A loop on a
             # legitimate tool is not a capability gap.
             if failure == HALLUCINATED_TOOL:
@@ -273,6 +286,16 @@ class KnowledgeGraph:
         ]
         return sorted(set(names))[:limit]
 
+    @staticmethod
+    def _noun_for(names: list[str]) -> str:
+        """Call an endpoint an endpoint and a tool a tool.
+
+        The lessons are read by a model that will act on them; describing a bare
+        function name as "an endpoint" is a small inaccuracy that makes the whole
+        block less trustworthy.
+        """
+        return "endpoint" if any("/" in n or ":" in n for n in names) else "tool"
+
     def lessons(self, limit: int = 6) -> list[str]:
         """Distil the graph into short, actionable instructions.
 
@@ -288,14 +311,31 @@ class KnowledgeGraph:
         out: list[str] = []
 
         for capability, count in missing:
-            readable = capability.replace("_", " ")
             examples = self._invented_names(capability)
             example_text = f" (previously tried: {', '.join(examples)})" if examples else ""
-            out.append(
-                f"You have NO tool that can {readable}. Across {count} previous attempt(s) "
-                f"an endpoint for it was invented and failed{example_text}. Do not try again -- "
-                f"state plainly in your final answer that this action requires a human."
-            )
+            noun = self._noun_for(examples)
+
+            if capability == UNRECOGNISED_CAPABILITY:
+                # No keyword matched, so we cannot name a capability the agent was
+                # reaching for. Naming one anyway produced "You have NO tool that
+                # can an unrecognised capability" -- ungrammatical, and it asserted
+                # a missing capability we had not actually identified. Name the
+                # tools instead, which is the part we do know.
+                named = ", ".join(f"'{n}'" for n in examples) or "these tools"
+                out.append(
+                    f"The following {noun}(s) are NOT in your tool registry and calling them "
+                    f"has failed {count} time(s): {named}. They do not exist -- calling them "
+                    f"again will fail the same way. If the task needs what they imply, say so "
+                    f"in your final answer rather than inventing another name for it."
+                )
+            else:
+                readable = capability.replace("_", " ")
+                article = "an" if noun[0] in "aeiou" else "a"
+                out.append(
+                    f"You have NO tool that can {readable}. Across {count} previous attempt(s) "
+                    f"{article} {noun} for it was invented and failed{example_text}. Do not try "
+                    f"again -- state plainly in your final answer that this action requires a human."
+                )
 
         for tool, count in looping:
             out.append(

@@ -254,6 +254,46 @@ def test_loop_lessons_are_produced_for_repeatedly_looping_tools(graph):
     assert "get_order" in lesson and "2 time(s)" in lesson
 
 
+def test_unrecognised_capability_lesson_names_tools_not_a_fake_capability(graph):
+    """The template for a recognised capability produced "You have NO tool that
+    can an unrecognised capability" when nothing matched -- ungrammatical, and it
+    asserted a missing capability that was never identified. Name what we know."""
+    for _ in range(2):
+        graph.ingest(_event(tool="flaky_api", error="ConnectionError: 503"), _verdict(), KNOWN)
+
+    lesson = next(l for l in graph.lessons() if "flaky_api" in l)
+
+    assert "NO tool that can an" not in lesson
+    assert "unrecognised capability" not in lesson
+    assert "'flaky_api'" in lesson
+    assert "NOT in your tool registry" in lesson
+
+
+def test_lesson_calls_a_bare_tool_a_tool_and_a_path_an_endpoint(graph):
+    """Describing a bare function name as "an endpoint" is a small inaccuracy in
+    text a model is asked to act on."""
+    graph.ingest(_event(tool="/v1/orders/refund"), _verdict(), KNOWN)
+    graph.ingest(_event(tool="delete_user_record"), _verdict(), KNOWN)
+
+    lessons = graph.lessons()
+    refund = next(l for l in lessons if "issue refunds" in l)
+    delete = next(l for l in lessons if "delete records" in l)
+
+    assert "an endpoint for it was invented" in refund
+    assert "a tool for it was invented" in delete
+
+
+def test_a_tool_that_is_both_unregistered_and_raised_records_both(graph):
+    """classify_failure returns one primary mode, but the graph should hold every
+    fact about the step -- not just the winning one."""
+    graph.ingest(_event(tool="flaky_api", error="ConnectionError: 503"), _verdict(), KNOWN)
+
+    modes = {n["id"] for n in graph.snapshot()["nodes"] if n["type"] == "failure_mode"}
+
+    assert HALLUCINATED_TOOL in modes
+    assert EXCEPTION in modes
+
+
 def test_a_clean_history_says_so_rather_than_returning_nothing(graph):
     graph.start_run()
 
