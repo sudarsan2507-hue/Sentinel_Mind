@@ -140,6 +140,27 @@ def main() -> int:
         "WARM  — lessons injected", args.runs, True, args.max_steps, args.settle, args.pause
     )
 
+    # Refuse to draw a conclusion from runs the meta-agent never judged. A
+    # rate-limited phase degrades every verdict to WARN, scores zero anomalies,
+    # and looks like a perfect result. That number would be a lie.
+    degraded_total = sum(r["degraded"] for r in cold + warm)
+    if degraded_total:
+        print("\n" + "=" * 78)
+        print(
+            f"{RED}INVALID: {degraded_total} step(s) were never judged by the "
+            f"meta-agent.{RESET}"
+        )
+        reason = next(
+            (r["degraded_reason"] for r in cold + warm if r["degraded_reason"]), ""
+        )
+        print(f"  First reason: {reason[:160]}")
+        print(
+            "\nDegraded verdicts are always WARN and can never be ANOMALY, so a phase\n"
+            "with degraded steps scores artificially few anomalies. No comparison is\n"
+            "reported. Raise --pause, lower --runs, or wait for the rate limit to reset."
+        )
+        return 1
+
     cold_mean = statistics.mean(r["anomaly"] for r in cold)
     warm_mean = statistics.mean(r["anomaly"] for r in warm)
     delta = cold_mean - warm_mean
