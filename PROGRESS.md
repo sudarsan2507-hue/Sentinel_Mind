@@ -185,3 +185,61 @@ noticeably longer than the rest. A warmup call on server start would fix it — 
   by `.gitignore`; `.env.example` carries only a placeholder.
 - **No remote configured and nothing pushed.** `gh` is not installed on this machine, so the
   GitHub repo has to be created manually or a remote URL supplied.
+
+### 2026-07-30 — real agent, knowledge graph, and an invalid measurement
+
+- **Built `backend/real_agent.py`** — a genuine tool-calling LLM agent, replacing the
+  scripted mock as a subject. Runs `llama-3.1-8b-instant` (weak on purpose), gets an
+  impossible task (issue a refund with only read-only tools), and an open
+  `call_internal_api` dispatcher so it can invent endpoints the way a real agent would.
+- **It failed on its own, unscripted.** Across four runs it invented refund, notification,
+  and escalation endpoints; looped on `lookup_customer` and `get_order` with identical
+  arguments; and hallucinated a `$100` refund amount on a `$149` order. SentinelMind caught
+  all of it, and correctly reasoned that notifying a customer about a refund whose
+  eligibility was never established is goal drift.
+- **Key finding for the graph design:** the *capability* the agent reaches for is stable
+  (refund / notify / escalate) but the exact endpoint path differs almost every run
+  (`/v1/orders/refund`, `/v1/requests/refund`, `/v1/refunds/create`). A store keyed on
+  literal tool names would memorise strings that never recur. So `knowledge_graph.py`
+  classifies endpoints into capability nodes and writes lessons about capabilities.
+- **Built `backend/knowledge_graph.py`** — persistent, count-weighted graph of
+  `(tool) exhibits (failure_mode)`, `(tool) requires (capability)`,
+  `(capability) missing_in (goal)`. Ingests only non-OK, non-degraded verdicts: a degraded
+  verdict means we could not look, and remembering it would teach a lesson about our own
+  outage. Distils to ranked, actionable lessons via `/knowledge/lessons`.
+- **Wired the loop:** `real_agent.py --learn` fetches those lessons and injects them into
+  its own system prompt. This is retrieval-augmented prompting over accumulated failure
+  memory — **not training, no weights change.** Documented as such everywhere.
+- **The lessons it generated were correct and actionable**, e.g. *"You have NO tool that can
+  issue refunds. Across 2 previous attempts an endpoint for it was invented and failed…
+  state plainly that this action requires a human."*
+
+#### The measurement is NOT established — first result was an artifact
+
+- First experiment reported **"anomalies fell 100%"**. That number was false. Every warm-phase
+  verdict was `Meta-agent unavailable (RateLimitError: 429)`. Degraded verdicts are always
+  WARN and **can never be ANOMALY by construction**, so a rate-limited phase scores zero
+  anomalies and looks flawless. The WARN column gave it away: 20 cold → 39 warm.
+- **This is the same trap `run_eval.py` already guards against, and I failed to guard the
+  learning experiment.** Fixed: it now counts degraded verdicts and refuses to report any
+  comparison when the meta-agent never judged a step.
+- Also added rate-limit backoff to `meta_agent.py` (honours `Retry-After`, 3 retries). A 429
+  is transient; degrading on the first one silently blinds the monitor for a whole burst.
+- Second attempt correctly reported `INVALID` rather than a number.
+- **Root cause: Groq free-tier daily cap exhausted** — `tokens per day (TPD): Limit 100000,
+  Used 99893`. Six agent runs plus a verdict per step consumed the day's budget. The agent's
+  own model was rate-limited too, producing 0–1 step runs.
+
+#### Open — does learning actually work?
+
+**Unknown. Do not claim it does.** The graph, the lessons, and the injection are all built and
+verified working; the *effect* on failure rate is unmeasured. To establish it:
+
+```bash
+cd backend && python app.py
+python evals/run_learning_experiment.py --runs 3 --pause 45 --settle 12
+```
+
+Needs a reset quota (rolling daily window) or a paid Groq tier. Budget roughly 25–30k tokens
+for a 3+3 run experiment. If the result comes back flat or worse, say so — the harness is
+built to report that honestly.
