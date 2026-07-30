@@ -47,12 +47,12 @@ Every verdict carries a plain-English explanation and a confidence score.
 |---|---|
 | Verdict latency | **p50 0.56s · p95 0.97s** |
 | Accuracy on the labelled eval set | **8–9 / 9** across runs |
-| Test suite | **20 passing**, offline, no API key required |
+| Test suite | **26 passing**, offline, no API key required |
 
 Reproduce both yourself:
 
 ```bash
-pytest tests/ -v          # 20 tests, fully offline
+pytest tests/ -v          # 26 tests, fully offline
 python evals/run_eval.py  # scores the meta-agent against 9 labelled cases
 ```
 
@@ -182,7 +182,7 @@ Sentinel-Mind/
 ├── evals/
 │   ├── cases.py             9 labelled cases with written rationales
 │   └── run_eval.py          accuracy, confusion matrix, p50/p95 latency
-└── tests/                   20 tests, fully offline
+└── tests/                   26 tests, fully offline
 ```
 
 ## API
@@ -240,8 +240,11 @@ monitoring tool that alters what it monitors isn't monitoring.
 
 Stated plainly, because a demo that hides its edges is worse than one that doesn't.
 
-- **`--replay` is not an offline fallback.** It skips the monitored pipeline, but the server still
-  calls the API to judge each replayed event. It survives a broken pipeline, not a dead network.
+- **Two fallbacks, and they cover different failures.** `--replay` re-sends recorded events and the
+  server re-judges them, so it survives a broken monitored pipeline but not a dead network.
+  `--offline` replays recorded *verdicts* through `POST /replay`, makes no provider call at all, and
+  survives dead wifi or a dead provider. Replayed verdicts are marked `replayed` in the audit log
+  and badged `REPLAY` on the dashboard — a recording shown as a live verdict would be a lie.
 - **No auto-correction.** SentinelMind detects and explains; it does not intervene in the monitored
   agent. The dashboard shows the button disabled rather than faking it.
 - **~5s cold start.** The first verdict of any server run pays connection setup; every subsequent

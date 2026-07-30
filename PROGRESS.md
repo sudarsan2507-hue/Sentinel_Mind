@@ -17,13 +17,13 @@ Plan and design decisions live in [PLAN.md](PLAN.md).
 | `backend/demo_agent.py` | done — declares goal, 7-step scenario, `--record` / `--replay` |
 | `frontend/index.html` | done — live graph, verdict feed, goal banner, stat row |
 | `evals/` | done — 9 labelled cases + scoring harness |
-| `tests/` | done — **20 / 20 passing** |
+| `tests/` | done — **26 / 26 passing** |
 | `README.md` | done |
 | End-to-end demo run | done — **verified live against Groq** |
-| Git repository | initialized, 15 commits, **no remote yet** |
+| Git repository | initialized, on `adharshan-feature`, remote `origin` configured, **nothing pushed** |
 | Deck updated for Groq | **not done — blocking** |
 
-**Tests passing:** 20 / 20 (deck says 15 — needs a one-word edit)
+**Tests passing:** 26 / 26 (deck says 15 — needs a one-word edit)
 **Eval accuracy:** **9 / 9 (100%)** on the labelled set
 **Verdict latency:** **p50 0.67s · p95 0.94s** (3s claim met, measured not asserted)
 **Provider:** Groq (`llama-3.3-70b-versatile`), OpenAI-compatible endpoint
@@ -46,33 +46,43 @@ Plan and design decisions live in [PLAN.md](PLAN.md).
 - Rendered context block for a repeated call carries goal, preceding steps, and
   `"has already occurred N time(s)"` — the loop signal reaching the model as a computed fact.
 
-### Cold start is real
+### Cold start is real — now warmed at boot
 
-The first verdict of any server run takes **~6s** (connection setup); every subsequent one is
-under a second. Both the eval and the live run show it. On stage, the first node will sit grey
-noticeably longer than the rest. A warmup call on server start would fix it — not done yet.
+The first verdict of any server run took **~6s** (connection setup); every subsequent one was
+under a second. On stage the first node would sit grey noticeably longer than the rest.
+`app.py` now fires `MetaAgent.warm_up()` on a daemon thread at startup, which pays both the
+TLS/pool cost and the strict-schema probe before anyone is watching. Failure is silent by
+design — a server that refuses to start because the provider is unreachable would break
+offline replay, which is precisely the mode you need when the provider is unreachable.
+
+Not yet re-measured against the live API; the warm-up path is verified only against an
+unreachable provider (it degrades and the server still starts).
 
 ---
 
 ## Open items
 
-1. **The offline fallback does not actually work offline — highest risk.** `--replay` skips the
-   monitored pipeline but the server still calls the API to judge each replayed event. It
-   survives a broken demo pipeline; it does **not** survive dead wifi or a dead API, which is
-   the failure it exists for. Fix: record *verdicts* alongside events and add a mode that
-   pushes pre-judged entries straight to the audit log and socket. This was mis-described in
-   PLAN.md until now; the doc is corrected.
+1. **Record the offline fallback — do this first, while online.** `--offline` is built and
+   verified, but it needs `traces/last_run.json` to contain verdicts, and no such file exists
+   on this machine yet (the one used to verify the path was synthetic and has been deleted —
+   fabricated verdicts do not belong in the record of truth). One `python demo_agent.py
+   --record` against a live server produces it. Without that file, offline mode refuses to run.
 2. **Update the deck — blocking.** Slide 4 says "Meta-Agent: Claude Sonnet"; reference [1]
    cites Anthropic docs and `claude-sonnet-4-6`. Both wrong. Slide 7 needs a Groq reference.
-   Test count says 15, actual is 20. And the impact slide can now say **0.94s p95** instead of
+   Test count says 15, actual is 26. And the impact slide can now say **0.94s p95** instead of
    "under 3 seconds", which is a stronger and honest claim.
-3. **Warm the connection on server start** to kill the ~6s first-verdict cold start.
-4. **Confirm which structured-output path the model takes** (`json_schema` vs downgraded
-   `json_object`) so you know what you're demoing. Strict schema is the stronger claim.
-5. **LangChain wiring.** Deck names it as the monitored framework; the demo wraps plain
+3. **Diagnose the file corruption — still unresolved, and it recurred.** See the 2026-07-30
+   entry: it hit the system prompt this time, which no test would have caught. The
+   prompt-integrity test now guards that one file. Nothing guards the rest.
+4. **Re-run the eval** to confirm the prompt fix restores the numbers. The 9/9 and the
+   p50/p95 figures on this page were measured *before* the prompt was corrupted, so they
+   should still hold — but they have not been re-measured since the repair.
+5. **Rotate the Groq key.** Carried over and still not confirmed done. It passed through a
+   corrupted file, and two characters were dropped from it at one point.
+6. **LangChain wiring.** Deck names it as the monitored framework; the demo wraps plain
    Python callables. `@monitor` is framework-agnostic so it's a small job — either wire it
    or adjust the slide.
-6. **Grow the eval set.** 9 cases is enough to demo, thin to generalise from. 100% on 9 cases
+7. **Grow the eval set.** 9 cases is enough to demo, thin to generalise from. 100% on 9 cases
    is not 100% accuracy — say "9/9 on our labelled set", not "100% accurate", to judges.
 
 ---
@@ -185,3 +195,56 @@ noticeably longer than the rest. A warmup call on server start would fix it — 
   by `.gitignore`; `.env.example` carries only a placeholder.
 - **No remote configured and nothing pushed.** `gh` is not installed on this machine, so the
   GitHub repo has to be created manually or a remote URL supplied.
+  *(Superseded 2026-07-30: `origin` now points at
+  `github.com/sudarsan2507-hue/Sentinel_Mind.git`. Still nothing pushed.)*
+
+### 2026-07-30 — Session 2, corruption recurrence and the offline fix
+
+- **The corruption came back, and this time it hit the system prompt.** Three sentences in
+  `SYSTEM_PROMPT` were logically inverted:
+  - `OK: the step is not valid.` (was "is valid")
+  - `ANOMALY: the step is not broken or not dangerous.` (was "is broken or dangerous")
+  - `a hallucinated tool ..., never a throw exception,` (was "a thrown exception")
+
+  The prompt was instructing the model to invert every verdict it produced. **Nothing failed.**
+  20/20 tests passed, the server started, and the dashboard would have filled with confident,
+  backwards answers. This is worse than the `confidence: 1.0` corruption from Session 1,
+  because that one at least only poisoned a number.
+- **Added a prompt-integrity test.** It asserts each verdict is defined the right way round and
+  pins the three exact inversions so they cannot silently return. A prompt is behaviour; it
+  deserves an assertion like any other. Note the limit honestly: this guards one file. The
+  underlying cause is still undiagnosed, and nothing guards the rest.
+- **Environment was not reproducible.** No Python on this machine had the project's deps —
+  3.14 had nothing, 3.10 had pytest/dotenv/requests/groq but no Flask, Flask-SocketIO, or
+  openai. The 20/20 in the log above could not have been reproduced today as written. Created
+  `.venv` on 3.14.2 from `requirements.txt` (already gitignored) and re-ran from there.
+- **Built the real offline fallback (open item #1, now closed).** `POST /replay` accepts a
+  pre-judged `{event, verdict}` pair and writes straight to the session window, audit log, and
+  socket — no provider call on that path. `demo_agent.py --offline` drives it. Verified
+  end-to-end **with `GROQ_API_KEY` set to empty**: server boots, replay lands, audit log shows
+  `OK` + `ANOMALY` correctly. `--replay` is unchanged and still re-judges.
+- **Decision: replayed verdicts are stamped `replayed: true`** and badged `REPLAY` on the
+  dashboard. Showing a recording as a live verdict would corrupt the one artefact that is
+  supposed to be the record of truth, and a judge who spots it later has every reason to
+  distrust the rest.
+- **`--record` now records verdicts, not just events.** They are produced server-side, so it
+  pulls them back from `GET /audit` after a 3s settle, meaning the file matches the audit log
+  exactly. Old event-only recordings still drive `--replay`; `--offline` refuses them with an
+  explicit message rather than replaying a half-run.
+- **Found a second silent bug while verifying the first.** `/health` reported
+  `structured_output: json_object` on a server with *no API key* — the auth failure had been
+  treated as a schema rejection, permanently downgrading the process to the weaker format. Any
+  transient error on the first call did this. Invisible, because `json_object` works fine; we
+  would simply have lost strict schema enforcement and gone on claiming it.
+- **Fix:** downgrade only on a 400 that names the format. 401, 429, timeouts, and connection
+  resets no longer touch it. The existing test had *asserted the buggy behaviour* (a connection
+  reset producing a downgrade), so it was rewritten rather than kept green.
+- Added `MetaAgent.warm_up()` + boot warm-up thread (open item #3), and
+  `structured_output_mode` on `/health` (open item #4).
+- Fixed the dashboard footer, which still read "Meta-agent: Claude Sonnet 5".
+- **26/26 tests passing** (was 20). Docs corrected: PLAN §4 §7 §9 §10, README results and
+  limitations.
+- **Not done, and it matters:** the eval has not been re-run since the prompt repair, so the
+  9/9 and p50/p95 figures above are pre-corruption measurements that have not been
+  re-confirmed. And `traces/last_run.json` does not exist — the offline path was verified with
+  a synthetic file that was deleted afterwards. **Record a real one before demo day.**

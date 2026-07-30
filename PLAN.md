@@ -75,9 +75,16 @@ Two things that shape `meta_agent.py`:
 
 1. **`temperature=0`.** Unlike Sonnet 5 (which rejects sampling params), Groq accepts them. A verdict
    should not vary between runs on the same input.
-2. **Structured output support varies by model.** We request strict `json_schema` first; if the API
+2. **Structured output support varies by model.** We request strict `json_schema` first; if the model
    rejects it, we downgrade once to `json_object`, cache that decision on the instance, and never pay
    the retry again. A model swap therefore can't break the demo mid-run.
+
+   The downgrade fires **only on a 400 that names the format** — not on 401, 429, timeouts, or
+   dropped connections. It is permanent for the life of the process, so downgrading for the wrong
+   reason silently costs us strict schema enforcement for the rest of the run, with nothing to show
+   for it: `json_object` works fine, so the weaker guarantee is invisible. `GET /health` reports the
+   resolved mode (`untested` / `json_schema` / `json_object`) so you know what you are demoing
+   instead of inferring it.
 
 Call shape:
 
@@ -194,9 +201,10 @@ sentinelmind/
 
 ---
 
-## 7. Test plan — 20 tests
+## 7. Test plan — 26 tests
 
-> The deck says 15. It is now 20 — the session-context logic needed coverage. One-word slide edit.
+> The deck says 15. It is now 26 — session-context logic, the offline replay path, the
+> structured-output downgrade rules, and a prompt-integrity guard. One-word slide edit.
 
 **test_decorator.py (4)** — calls the original function; emits a trace event; captures errors;
 records duration.
@@ -205,14 +213,24 @@ records duration.
 is stable across key order; window is bounded; render carries goal/history/repeat count; render
 admits drift is unassessable without a goal.
 
-**test_meta_agent.py (4)** — returns `OK`; returns `ANOMALY`; handles API failure gracefully (and
-pins the `json_schema` → `json_object` downgrade); verdict has all required fields. *(The Groq client
-is faked — tests run offline, with no key, in ~2s.)*
+**test_meta_agent.py (8)** — returns `OK`; returns `ANOMALY`; handles API failure gracefully *without*
+downgrading the format; downgrades only on a real 400 schema rejection and remembers it; an auth
+failure never downgrades; `structured_output_mode` reports the resolved path; verdict has all
+required fields; **the system prompt defines each verdict the right way round.** *(The Groq client is
+faked — tests run offline, with no key, in under a second.)*
+
+That last one is not defensive padding. File corruption inverted three sentences in the prompt —
+"the step is valid" became "the step is not valid", and the ANOMALY definition was negated — which
+told the model to produce backwards verdicts. Nothing failed: tests passed, the server ran, the
+dashboard filled with confident wrong answers. **A prompt is behaviour, so it gets an assertion.**
+
+**test_websocket.py (4)** — `/health` returns 200; `/audit` returns the correct structure; `/replay`
+records a pre-judged verdict without touching the meta-agent; `/replay` rejects a payload with no
+verdict.
 
 **test_audit_log.py (5)** — records an entry; filters anomalies; exports valid JSON; clears the log;
 handles multiple records.
 
-**test_websocket.py (2)** — `/health` returns 200; `/audit` returns the correct structure.
 
 ### Evals — separate from tests, and the stronger claim
 
@@ -244,16 +262,25 @@ because it needs everything else to exist to be worth running.
 ## 9. Install & run
 
 ```bash
-pip install -r requirements.txt
+# A project venv, because no system Python on the build machine had the deps.
+py -3.14 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 
 cp .env.example .env        # then paste your key from console.groq.com
 
 cd backend && python app.py
 # new terminal
-python demo_agent.py
+python demo_agent.py --record   # live run; saves events AND verdicts to traces/
 
-pytest tests/ -v          # 20 tests, offline, no key needed
+pytest tests/ -v          # 26 tests, offline, no key needed
 python evals/run_eval.py  # scores the meta-agent against 9 labelled cases (needs a key)
+```
+
+**Record the fallback before demo day.** `--record` is what makes `--offline` possible; without a
+recording that carries verdicts, offline mode refuses to run rather than replaying half a run.
+
+```bash
+python demo_agent.py --offline   # no provider call anywhere; survives dead wifi
 ```
 
 `.env` is gitignored. Never commit a key — scrapers find them within minutes.
@@ -268,11 +295,14 @@ structured audit log.
 **Out of scope:** auto-correction injection — present as a disabled UI button so judges can see the
 roadmap without us claiming it works.
 
-**Fallback — currently weaker than advertised.** `demo_agent.py --replay` replays a recorded trace
-without running the monitored pipeline, but the server still calls the API to judge each replayed
-event. So it survives a broken demo pipeline; it does **not** survive a dead API or dead wifi, which
-is the failure it was meant to cover. A true offline mode needs recorded *verdicts*, not just
-recorded events, pushed straight to the audit log. See PROGRESS.md open items.
+**Fallback — two modes, covering different failures.** `--replay` re-sends recorded events; the
+server still judges each one, so it survives a broken demo pipeline but not a dead network.
+`--offline` replays recorded *verdicts* through `POST /replay`, which writes straight to the audit
+log and the socket without touching the provider — that one survives dead wifi and a dead API.
+`--record` now saves events *and* verdicts (pulled back from `GET /audit` after the run) so an
+offline replay reproduces a real run rather than an approximation of one. Replayed verdicts carry
+`replayed: true` and render with a `REPLAY` badge; passing a recording off as a live verdict would
+corrupt the one artefact that is supposed to be the record of truth.
 
 **Provider risk:** Groq's free tier is rate-limited, and its model lineup changes. `SENTINEL_MODEL`
 makes a swap a one-line env change, and the `json_schema` → `json_object` downgrade means a model
