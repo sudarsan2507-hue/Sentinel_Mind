@@ -29,6 +29,10 @@ from pathlib import Path
 
 import requests
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from artifacts import write_result  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 BACKEND = ROOT / "backend"
 SERVER = "http://127.0.0.1:5000"
@@ -43,7 +47,13 @@ def one_run(learn: bool, max_steps: int, settle: float) -> dict:
     cmd = [sys.executable, "real_agent.py", "--max-steps", str(max_steps)]
     if learn:
         cmd.append("--learn")
-    subprocess.run(cmd, cwd=BACKEND, capture_output=True, text=True, timeout=300)
+
+    started = time.perf_counter()
+    # The exit code was previously discarded. An agent that crashed on startup
+    # produced zero steps and therefore zero anomalies -- indistinguishable, in
+    # the mean, from an agent that behaved perfectly.
+    proc = subprocess.run(cmd, cwd=BACKEND, capture_output=True, text=True, timeout=300)
+    agent_seconds = round(time.perf_counter() - started, 2)
 
     # Verdicts are judged on a worker thread; give it time to drain the queue.
     time.sleep(settle)
@@ -52,6 +62,14 @@ def one_run(learn: bool, max_steps: int, settle: float) -> dict:
     counts = audit["summary"]["counts"]
     anomalies = [
         e["event"]["tool"] for e in audit["entries"] if e["status"] == "ANOMALY"
+    ]
+    # Verdicts now carry token usage, so a run's meta-agent cost is recoverable
+    # from the audit log. Missing on degraded verdicts, hence the `or {}`.
+    tokens = sum((e["verdict"].get("tokens") or {}).get("total", 0) for e in audit["entries"])
+    latencies = [
+        e["verdict"]["latency_ms"]
+        for e in audit["entries"]
+        if isinstance(e["verdict"].get("latency_ms"), (int, float))
     ]
     # A degraded verdict means the meta-agent never judged the step. Degraded
     # verdicts are always WARN and can never be ANOMALY, so a rate-limited run
@@ -70,6 +88,13 @@ def one_run(learn: bool, max_steps: int, settle: float) -> dict:
         "anomaly_tools": anomalies,
         "degraded": len(degraded),
         "degraded_reason": degraded[0] if degraded else "",
+        "agent_seconds": agent_seconds,
+        "agent_exit_code": proc.returncode,
+        # Tail only: enough to identify a crash without burying the artifact in
+        # a traceback nobody will read from a JSON file.
+        "agent_stderr_tail": proc.stderr.strip()[-300:] if proc.returncode else "",
+        "meta_agent_tokens": tokens,
+        "verdict_latency_ms_mean": round(statistics.mean(latencies), 1) if latencies else 0.0,
     }
 
 
@@ -92,9 +117,126 @@ def phase(
             f"{i:<5} {r['steps']:<7} {r['ok']:<5} {r['warn']:<6} {r['anomaly']:<6} "
             f"{flag:<6} {DIM}{tools}{RESET}"
         )
+        if r["agent_exit_code"]:
+            # A crashed agent takes no steps and so scores no anomalies, which
+            # reads as a flawless run unless it is said out loud.
+            print(
+                f"      {RED}agent exited {r['agent_exit_code']}{RESET} "
+                f"{DIM}{r['agent_stderr_tail'][-120:]}{RESET}"
+            )
         if i < runs and pause:
             time.sleep(pause)  # stay under the provider's rate limit
     return results
+
+
+def _phase_metrics(runs: list[dict]) -> dict:
+    """Aggregate one phase. Everything a chart might want, computed once."""
+    if not runs:
+        return {}
+    anomalies = [r["anomaly"] for r in runs]
+    return {
+        "runs": len(runs),
+        "mean_anomalies": round(statistics.mean(anomalies), 3),
+        "median_anomalies": round(statistics.median(anomalies), 3),
+        # Population stdev, and only when n > 1 -- statistics.stdev raises on a
+        # single sample, and an experiment must not die while writing its report.
+        "stdev_anomalies": round(statistics.pstdev(anomalies), 3) if len(runs) > 1 else 0.0,
+        "total_anomalies": sum(anomalies),
+        "mean_steps": round(statistics.mean(r["steps"] for r in runs), 3),
+        "total_steps": sum(r["steps"] for r in runs),
+        "total_ok": sum(r["ok"] for r in runs),
+        "total_warn": sum(r["warn"] for r in runs),
+        "total_degraded": sum(r["degraded"] for r in runs),
+        # A run that produced steps and no anomalies is the outcome the loop is
+        # trying to cause; a crashed run is not a success and is excluded.
+        "clean_runs": sum(1 for r in runs if r["anomaly"] == 0 and r["agent_exit_code"] == 0),
+        "success_rate": round(
+            sum(1 for r in runs if r["anomaly"] == 0 and r["agent_exit_code"] == 0) / len(runs), 3
+        ),
+        "agent_failures": sum(1 for r in runs if r["agent_exit_code"] != 0),
+        "total_agent_seconds": round(sum(r["agent_seconds"] for r in runs), 2),
+        "total_meta_agent_tokens": sum(r["meta_agent_tokens"] for r in runs),
+        "anomaly_tools": sorted({t for r in runs for t in r["anomaly_tools"]}),
+    }
+
+
+def _rows(phase_name: str, runs: list[dict]) -> list[dict]:
+    """One flat CSV row per run -- the unit anyone would plot."""
+    return [
+        {
+            "phase": phase_name,
+            "run": i,
+            "steps": r["steps"],
+            "ok": r["ok"],
+            "warn": r["warn"],
+            "anomaly": r["anomaly"],
+            "degraded": r["degraded"],
+            "agent_seconds": r["agent_seconds"],
+            "agent_exit_code": r["agent_exit_code"],
+            "meta_agent_tokens": r["meta_agent_tokens"],
+            "verdict_latency_ms_mean": r["verdict_latency_ms_mean"],
+            "anomaly_tools": r["anomaly_tools"],
+        }
+        for i, r in enumerate(runs, 1)
+    ]
+
+
+def _persist(args, outcome: str, cold: list[dict], warm: list[dict],
+             lessons: list[str], reason: str = "") -> None:
+    """Write the JSON + CSV artifact for this experiment and say where it went."""
+    cold_metrics = _phase_metrics(cold)
+    warm_metrics = _phase_metrics(warm)
+
+    delta = None
+    if outcome != "INVALID" and cold_metrics and warm_metrics:
+        raw = cold_metrics["mean_anomalies"] - warm_metrics["mean_anomalies"]
+        delta = {
+            "anomalies_per_run": round(raw, 3),
+            "percent": round(raw / cold_metrics["mean_anomalies"] * 100, 1)
+            if cold_metrics["mean_anomalies"]
+            else 0.0,
+        }
+
+    written = write_result(
+        "learning",
+        {
+            # outcome is a first-class field: an artifact whose numbers cannot
+            # be trusted must say so in the file, not only on the terminal it
+            # was printed to and then closed.
+            "outcome": outcome,
+            "invalid_reason": reason,
+            "valid": outcome != "INVALID",
+            "config": {
+                "runs_per_phase": args.runs,
+                "max_steps": args.max_steps,
+                "settle_seconds": args.settle,
+                "pause_seconds": args.pause,
+                "server": SERVER,
+            },
+            "cold": {**cold_metrics, "runs_detail": cold},
+            "warm": {**warm_metrics, "runs_detail": warm},
+            "delta": delta,
+            "lessons": lessons,
+            "totals": {
+                "meta_agent_tokens": cold_metrics.get("total_meta_agent_tokens", 0)
+                + warm_metrics.get("total_meta_agent_tokens", 0),
+                "agent_seconds": round(
+                    cold_metrics.get("total_agent_seconds", 0)
+                    + warm_metrics.get("total_agent_seconds", 0), 2
+                ),
+                "degraded_steps": cold_metrics.get("total_degraded", 0)
+                + warm_metrics.get("total_degraded", 0),
+                "agent_failures": cold_metrics.get("agent_failures", 0)
+                + warm_metrics.get("agent_failures", 0),
+            },
+        },
+        rows=_rows("cold", cold) + _rows("warm", warm),
+    )
+
+    if written["json"]:
+        print(f"{DIM}Results written to {written['json'].relative_to(ROOT)}{RESET}")
+    if written["csv"]:
+        print(f"{DIM}                   {written['csv'].relative_to(ROOT)}{RESET}\n")
 
 
 def main() -> int:
@@ -122,8 +264,12 @@ def main() -> int:
     print(f"\n{BOLD}SentinelMind learning experiment{RESET}")
     print(f"{args.runs} run(s) per phase, same task, same agent model")
 
-    # Wipe memory so the cold phase is genuinely cold.
-    requests.post(f"{SERVER}/knowledge/clear", timeout=10)
+    # Wipe memory so the cold phase is genuinely cold. The endpoint requires an
+    # explicit confirm; a silently-refused wipe would make the cold phase warm
+    # and quietly invalidate the whole comparison.
+    wiped = requests.post(f"{SERVER}/knowledge/clear", json={"confirm": True}, timeout=10)
+    if wiped.status_code != 200:
+        sys.exit(f"Could not clear knowledge before the cold phase: {wiped.text}")
     cold = phase(
         "COLD  — no memory", args.runs, False, args.max_steps, args.settle, args.pause
     )
@@ -159,6 +305,10 @@ def main() -> int:
             "with degraded steps scores artificially few anomalies. No comparison is\n"
             "reported. Raise --pause, lower --runs, or wait for the rate limit to reset."
         )
+        # Written anyway. An INVALID run records that the provider was rate
+        # limited at a particular time with particular settings -- exactly the
+        # context you want when comparing it against a later attempt.
+        _persist(args, "INVALID", cold, warm, lessons, reason=reason)
         return 1
 
     cold_mean = statistics.mean(r["anomaly"] for r in cold)
@@ -184,6 +334,9 @@ def main() -> int:
         f"\n{DIM}n={args.runs} per phase at temperature 0.7. This is a directional signal,\n"
         f"not a statistically significant result. Say 'across {args.runs} runs' when you quote it.{RESET}\n"
     )
+
+    verdict = "IMPROVED" if delta > 0 else ("UNCHANGED" if delta == 0 else "REGRESSED")
+    _persist(args, verdict, cold, warm, lessons)
     return 0
 
 

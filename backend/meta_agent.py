@@ -128,6 +128,25 @@ def _is_format_rejection(exc: Exception) -> bool:
     return status is not None and int(status) == 400
 
 
+def _usage_of(response: Any) -> dict | None:
+    """Token counts from a completion, or None if the provider didn't report any.
+
+    Best-effort and never fatal: a missing or oddly-shaped ``usage`` block is not
+    a reason to lose a verdict we already have.
+    """
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    try:
+        return {
+            "prompt": int(getattr(usage, "prompt_tokens", 0) or 0),
+            "completion": int(getattr(usage, "completion_tokens", 0) or 0),
+            "total": int(getattr(usage, "total_tokens", 0) or 0),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
 def _is_rate_limit(exc: Exception) -> bool:
     """Detect a 429 without importing the SDK's exception hierarchy, so a faked
     client in tests can raise anything shaped like one."""
@@ -329,9 +348,11 @@ class MetaAgent:
                 event, "Meta-agent returned a non-object verdict.", started
             )
 
-        return self._finalize(verdict, event, started)
+        return self._finalize(verdict, event, started, _usage_of(response))
 
-    def _finalize(self, verdict: dict, event: dict, started: float) -> dict:
+    def _finalize(
+        self, verdict: dict, event: dict, started: float, tokens: dict | None = None
+    ) -> dict:
         """Normalize, apply the confidence threshold, and stamp latency."""
         status = str(verdict.get("status", WARN)).upper()
         if status not in (OK, WARN, ANOMALY):
@@ -364,6 +385,11 @@ class MetaAgent:
             "latency_ms": round((time.perf_counter() - started) * 1000, 2),
             "downgraded": downgraded,
             "degraded": False,
+            # None when the provider didn't report usage. Recorded per verdict so
+            # a run's cost can be reconstructed from the audit log alone -- the
+            # free tier has a daily token cap, and exhausting it silently is what
+            # invalidated the first learning experiment.
+            "tokens": tokens,
         }
 
     def _fallback(self, event: dict, reason: str, started: float) -> dict:
@@ -385,4 +411,5 @@ class MetaAgent:
             "latency_ms": round((time.perf_counter() - started) * 1000, 2),
             "downgraded": False,  # nothing was downgraded by the threshold
             "degraded": True,
+            "tokens": None,  # no call completed, so nothing was spent
         }

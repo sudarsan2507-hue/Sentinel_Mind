@@ -139,6 +139,29 @@ def test_auth_failure_does_not_downgrade_the_format(sample_event):
     assert agent.structured_output_mode == "untested"
 
 
+def test_verdict_carries_token_usage_when_the_provider_reports_it(sample_event):
+    """Per-verdict cost, so a run's spend is recoverable from the audit log."""
+    client = FakeGroq({"status": "OK", "explanation": "ok", "confidence": 0.9})
+    client.completions._response.usage = type(
+        "Usage", (), {"prompt_tokens": 812, "completion_tokens": 44, "total_tokens": 856}
+    )()
+
+    verdict = MetaAgent(client=client).evaluate(sample_event)
+
+    assert verdict["tokens"] == {"prompt": 812, "completion": 44, "total": 856}
+
+
+def test_missing_usage_is_none_not_zero(sample_event):
+    """None means "not reported"; 0 would claim a call cost nothing."""
+    verdict = MetaAgent(
+        client=FakeGroq({"status": "OK", "explanation": "ok", "confidence": 0.9})
+    ).evaluate(sample_event)
+    assert verdict["tokens"] is None
+
+    degraded = MetaAgent(client=FakeGroq(error=RuntimeError("down"))).evaluate(sample_event)
+    assert degraded["tokens"] is None
+
+
 def test_verdict_has_all_required_fields(sample_event):
     client = FakeGroq(
         {"status": "WARN", "explanation": "Unusually slow.", "confidence": 0.6}

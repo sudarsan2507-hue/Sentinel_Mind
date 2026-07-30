@@ -172,6 +172,47 @@ python demo_agent.py --offline   # replays those verdicts, no provider call at a
 `--offline` refuses to run against a recording that has no verdicts in it, rather than replaying
 half a run and looking like it worked.
 
+### Watching a real agent, and learning from it
+
+`demo_agent.py` is scripted — reliable for a stage demo, but its failures are written in advance.
+`real_agent.py` is not: it runs its own model (`llama-3.1-8b-instant`, weak on purpose), gets a task
+it cannot complete with the read-only tools it has, and decides for itself what to do. The loops,
+the drift, and the invented endpoints are whatever the model actually does.
+
+```bash
+python real_agent.py             # a real agent, monitored live
+python real_agent.py --learn     # same, with lessons from past failures injected
+```
+
+Every non-OK verdict is ingested into `knowledge_graph.py` as
+`(tool) exhibits (failure_mode)`, `(tool) requires (capability)`,
+`(capability) missing_in (goal)`, persisted across runs and distilled into ranked lessons. It keys
+on **capabilities, not endpoint strings** — the agent invents a different path almost every run
+(`/v1/orders/refund`, `/v1/refunds/create`), but the capability it reaches for is stable, so
+"you have no way to issue refunds" transfers where a literal path would not.
+
+> **This is not training.** No weights change. It is retrieval-augmented prompting over an
+> accumulated failure store. The loop is genuine; the description has to stay honest.
+>
+> ⚠️ **Whether the memory actually reduces failures is unmeasured.** The graph, the lessons, and
+> the injection all work and are verified. The *effect* is not established — the first experiment
+> that claimed a 100% drop was an artifact of rate-limited verdicts, since a degraded verdict is
+> WARN by construction and can never be ANOMALY. `evals/run_learning_experiment.py` now refuses to
+> report a comparison built on unjudged steps. Do not claim the loop works until it prints a number.
+
+Every experiment run writes a timestamped artifact pair to `evals/results/`, so a result never has
+to be re-earned in order to be plotted:
+
+```
+evals/results/learning_2026-07-30_14-42-18.json    full structure, replots without the server
+evals/results/learning_2026-07-30_14-42-18.csv     flat rows for pandas/Excel
+```
+
+Files accumulate rather than overwrite. Each carries an `outcome` (`IMPROVED` / `UNCHANGED` /
+`REGRESSED` / `INVALID`) and a `valid` flag, so a rate-limited run is preserved as evidence and can
+never be mistaken for a clean one. Verdicts also record token usage now, so a run's cost against the
+provider's daily cap is recoverable from the audit log alone.
+
 ### The demo scenario
 
 `demo_agent.py` runs a customer-support pipeline that deliberately produces every verdict:
@@ -197,13 +238,17 @@ Sentinel-Mind/
 │   ├── session_context.py   goal + window + deterministic loop detection
 │   ├── meta_agent.py        trace + context → Groq → verdict
 │   ├── audit_log.py         thread-safe verdict store
+│   ├── knowledge_graph.py   persistent failure memory, distilled into lessons
 │   ├── app.py               Flask + SocketIO server
-│   └── demo_agent.py        the monitored pipeline
+│   ├── demo_agent.py        scripted pipeline — reliable stage demo
+│   └── real_agent.py        a genuine tool-calling agent that fails unscripted
 ├── frontend/
 │   └── index.html           React + vis.js, no build step
 ├── evals/
 │   ├── cases.py             9 labelled cases with written rationales
-│   └── run_eval.py          accuracy, confusion matrix, p50/p95 latency
+│   ├── run_eval.py          accuracy, confusion matrix, p50/p95 latency
+│   ├── artifacts.py         writes every run to timestamped JSON + CSV
+│   └── results/             one file pair per run, never overwritten
 └── tests/                   32 tests, fully offline
 ```
 
@@ -213,6 +258,9 @@ Sentinel-Mind/
 |---|---|---|
 | `POST` | `/trace` | Submit one trace event (returns `202` immediately) |
 | `POST` | `/replay` | Submit a pre-judged `{event, verdict}` pair — no provider call |
+| `GET` | `/knowledge` | Accumulated failure graph: nodes, edges, derived lessons |
+| `GET` | `/knowledge/lessons` | Lessons only, plus a ready-made prompt block |
+| `POST` | `/knowledge/clear` | Wipe accumulated memory — requires `{"confirm": true}` |
 | `POST` | `/session/goal` | Declare what the agent is supposed to accomplish |
 | `GET` | `/session` | Current goal and rolling window |
 | `GET` | `/audit` | Full audit log; `?status=ANOMALY` to filter |
