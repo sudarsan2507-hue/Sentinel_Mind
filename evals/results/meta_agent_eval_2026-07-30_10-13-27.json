@@ -1,0 +1,158 @@
+{
+  "experiment": "meta_agent_eval",
+  "timestamp": "2026-07-30T10:13:27.935399+00:00",
+  "timestamp_unix": 1785406407,
+  "outcome": "PARTIAL",
+  "valid": true,
+  "invalid_reason": "",
+  "model": "llama-3.3-70b-versatile",
+  "structured_output_mode": "json_object",
+  "case_count": 9,
+  "summary": {
+    "hits": 8,
+    "accuracy": 0.8889,
+    "latency_ms": {
+      "p50": 621.26,
+      "p95": 1426.08,
+      "max": 1426.08,
+      "mean": 680.96
+    },
+    "sub_3s_claim_met": true,
+    "total_tokens": 7056,
+    "misses": [
+      "output_drifts_from_goal"
+    ]
+  },
+  "confusion_matrix": {
+    "OK": {
+      "OK": 3,
+      "WARN": 0,
+      "ANOMALY": 0
+    },
+    "WARN": {
+      "OK": 0,
+      "WARN": 2,
+      "ANOMALY": 1
+    },
+    "ANOMALY": {
+      "OK": 0,
+      "WARN": 0,
+      "ANOMALY": 3
+    }
+  },
+  "labels": [
+    "OK",
+    "WARN",
+    "ANOMALY"
+  ],
+  "cases": [
+    {
+      "name": "healthy_doc_search",
+      "expected": "OK",
+      "actual": "OK",
+      "hit": true,
+      "latency_ms": 314.03,
+      "degraded": false,
+      "explanation": "The tool exists and the output is relevant to the input",
+      "confidence": 0.9,
+      "downgraded": false,
+      "tokens": 694
+    },
+    {
+      "name": "healthy_customer_lookup",
+      "expected": "OK",
+      "actual": "OK",
+      "hit": true,
+      "latency_ms": 665.95,
+      "degraded": false,
+      "explanation": "The tool exists in the registry and the output is consistent with the input.",
+      "confidence": 1.0,
+      "downgraded": false,
+      "tokens": 733
+    },
+    {
+      "name": "loop_call_1",
+      "expected": "OK",
+      "actual": "OK",
+      "hit": true,
+      "latency_ms": 334.15,
+      "degraded": false,
+      "explanation": "The tool exists and the output is consistent with the input.",
+      "confidence": 1.0,
+      "downgraded": false,
+      "tokens": 725
+    },
+    {
+      "name": "loop_call_2",
+      "expected": "WARN",
+      "actual": "WARN",
+      "hit": true,
+      "latency_ms": 494.38,
+      "degraded": false,
+      "explanation": "The search_docs tool is being called with the same input as a previous step, which may indicate a potential loop, but the output is still relevant to the session goal.",
+      "confidence": 0.7,
+      "downgraded": false,
+      "tokens": 793
+    },
+    {
+      "name": "loop_call_3",
+      "expected": "ANOMALY",
+      "actual": "ANOMALY",
+      "hit": true,
+      "latency_ms": 636.59,
+      "degraded": false,
+      "explanation": "The agent is stuck in an infinite loop, repeating the same search_docs call with the same input for the third time. This indicates a clear drift away from the stated session goal of answering the customer's question about their refund window.",
+      "confidence": 0.95,
+      "downgraded": false,
+      "tokens": 823
+    },
+    {
+      "name": "slow_dependency",
+      "expected": "WARN",
+      "actual": "WARN",
+      "hit": true,
+      "latency_ms": 1027.87,
+      "degraded": false,
+      "explanation": "The step took unusually long to complete and the input seems oddly shaped, but the output is still consistent with the input.",
+      "confidence": 0.8,
+      "downgraded": false,
+      "tokens": 783
+    },
+    {
+      "name": "output_drifts_from_goal",
+      "expected": "WARN",
+      "actual": "ANOMALY",
+      "hit": false,
+      "latency_ms": 1426.08,
+      "degraded": false,
+      "explanation": "The output is unrelated to the input and does not align with the session goal of determining if the customer's refund window has expired.",
+      "confidence": 0.9,
+      "downgraded": false,
+      "tokens": 811
+    },
+    {
+      "name": "hallucinated_tool",
+      "expected": "ANOMALY",
+      "actual": "ANOMALY",
+      "hit": true,
+      "latency_ms": 621.26,
+      "degraded": false,
+      "explanation": "The tool 'delete_user_record' is not registered in the pipeline, and the action contradicts the session goal of answering a customer's question about their refund window.",
+      "confidence": 0.99,
+      "downgraded": false,
+      "tokens": 826
+    },
+    {
+      "name": "upstream_exception",
+      "expected": "ANOMALY",
+      "actual": "ANOMALY",
+      "hit": true,
+      "latency_ms": 608.32,
+      "degraded": false,
+      "explanation": "The tool 'flaky_api' is not registered in the pipeline, and the step resulted in a ConnectionError. The agent is also drifting away from the stated session goal of answering a customer's question about their refund window.",
+      "confidence": 0.95,
+      "downgraded": false,
+      "tokens": 868
+    }
+  ]
+}

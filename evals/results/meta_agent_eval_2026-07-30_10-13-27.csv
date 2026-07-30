@@ -1,0 +1,10 @@
+case,expected,actual,hit,confidence,latency_ms,tokens,degraded,downgraded
+healthy_doc_search,OK,OK,1,0.9,314.03,694,0,0
+healthy_customer_lookup,OK,OK,1,1.0,665.95,733,0,0
+loop_call_1,OK,OK,1,1.0,334.15,725,0,0
+loop_call_2,WARN,WARN,1,0.7,494.38,793,0,0
+loop_call_3,ANOMALY,ANOMALY,1,0.95,636.59,823,0,0
+slow_dependency,WARN,WARN,1,0.8,1027.87,783,0,0
+output_drifts_from_goal,WARN,ANOMALY,0,0.9,1426.08,811,0,0
+hallucinated_tool,ANOMALY,ANOMALY,1,0.99,621.26,826,0,0
+upstream_exception,ANOMALY,ANOMALY,1,0.95,608.32,868,0,0

@@ -21,15 +21,16 @@ Plan and design decisions live in [PLAN.md](PLAN.md).
 | `evals/` | done — 9 labelled cases + scoring harness + learning experiment |
 | `tests/` | done — **32 / 32 passing** ⚠️ *no coverage for `real_agent.py` or `knowledge_graph.py`* |
 | `README.md` | done — ⚠️ *does not yet document the real agent or the knowledge graph* |
-| End-to-end demo run | done — **verified live against Groq** |
+| End-to-end demo run | done — **verified live 2026-07-30**, 2 OK · 2 WARN · 5 ANOMALY |
 | Git repository | `adharshan-feature` merged with `origin/main`, **merge not pushed** |
 | Deck updated for Groq | **not done — blocking** |
 
-**Tests passing:** 32 / 32 (deck says 15 — needs a one-word edit)
-**Eval accuracy:** ⚠️ **stale — must be re-run.** Previously 9/9, but measured across the window
-in which the system prompt was corrupted, so the number cannot be defended.
-**Verdict latency:** ⚠️ **stale — must be re-run.** Previously p50 0.67s · p95 0.94s, but the p95
-was computed one rank too low and understated the tail.
+**Tests passing:** 132 / 132 (deck says 15 — needs a one-word edit)
+**Eval accuracy:** **8 / 9** — re-measured 2026-07-30 after the prompt repair, with the corrected
+percentile. One miss, `output_drifts_from_goal` (WARN expected, ANOMALY returned).
+**Verdict latency:** **p50 0.62s · p95 1.43s**, cold start 2.27s measured separately and excluded.
+**Structured output:** `json_object` — this model **rejects** strict `json_schema`, so the
+documented fallback is what actually runs. Claim JSON mode, not strict schema enforcement.
 **Provider:** Groq (`llama-3.3-70b-versatile`), OpenAI-compatible endpoint
 **Pushed to GitHub:** no (requires explicit approval)
 
@@ -66,28 +67,25 @@ unreachable provider (it degrades and the server still starts).
 
 ## Open items
 
-1. **Record the offline fallback — do this first, while online.** `--offline` is built and
-   verified, but it needs `traces/last_run.json` to contain verdicts, and no such file exists
-   on this machine yet (the one used to verify the path was synthetic and has been deleted —
-   fabricated verdicts do not belong in the record of truth). One `python demo_agent.py
-   --record` against a live server produces it. Without that file, offline mode refuses to run.
-2. **Update the deck — blocking.** Slide 4 says "Meta-Agent: Claude Sonnet"; reference [1]
-   cites Anthropic docs and `claude-sonnet-4-6`. Both wrong. Slide 7 needs a Groq reference.
-   Test count says 15, actual is 26. And the impact slide can now say **0.94s p95** instead of
-   "under 3 seconds", which is a stronger and honest claim.
-3. **Diagnose the file corruption — still unresolved, and it recurred.** See the 2026-07-30
-   entry: it hit the system prompt this time, which no test would have caught. The
-   prompt-integrity test now guards that one file. Nothing guards the rest.
-4. **Re-run the eval** to confirm the prompt fix restores the numbers. The 9/9 and the
-   p50/p95 figures on this page were measured *before* the prompt was corrupted, so they
-   should still hold — but they have not been re-measured since the repair.
-5. **Rotate the Groq key.** Carried over and still not confirmed done. It passed through a
-   corrupted file, and two characters were dropped from it at one point.
+1. **Update the deck — blocking, and now the only thing between here and done.** Slide 4 says
+   "Meta-Agent: Claude Sonnet"; reference [1] cites Anthropic docs and `claude-sonnet-4-6`.
+   Both wrong. Slide 7 needs a Groq reference. Test count says 15, actual is **132**. The
+   impact slide can say **p95 1.43s** — measured, not asserted.
+2. **Diagnose the file corruption — still unresolved after two incidents.** It hit the system
+   prompt on 2026-07-30, which no test would have caught. There is now a prompt-integrity
+   test guarding that one file. Nothing guards the rest.
+3. **Rotate the Groq key.** Still not confirmed. The key in use passed through a corrupted
+   file, and two characters were dropped from it at one point.
+4. **Is the learning loop real? Unmeasured.** The knowledge graph, the lessons, and the
+   injection all work. The effect on failure rate has never been measured without rate-limit
+   contamination. `evals/run_learning_experiment.py --runs 3` needs ~25–30k tokens against a
+   100k daily cap. **Do not claim the loop reduces failures until this prints a number.**
+5. **`demo_agent.py` has 0% test coverage** — and it is the file that runs on stage.
 6. **LangChain wiring.** Deck names it as the monitored framework; the demo wraps plain
    Python callables. `@monitor` is framework-agnostic so it's a small job — either wire it
    or adjust the slide.
-7. **Grow the eval set.** 9 cases is enough to demo, thin to generalise from. 100% on 9 cases
-   is not 100% accuracy — say "9/9 on our labelled set", not "100% accurate", to judges.
+7. **Grow the eval set.** 9 cases is enough to demo, thin to generalise from. Say "8 of 9 on
+   our labelled set" to judges, never a percentage.
 
 ---
 
@@ -290,6 +288,35 @@ directly affects a number we quote.
   `/replay` added to the API table, quick start documents the venv and the record/offline flow,
   cold-start limitation rewritten.
 - **32/32 tests passing** (was 26).
+
+### 2026-07-30 — Session 2, verified live after the repairs
+
+Everything below was run against the real API with a fresh `.env`, after the prompt fix, the
+percentile fix, and the merge. These are the numbers to quote.
+
+- **Eval: 8/9, p50 0.62s, p95 1.43s**, cold start 2.27s measured separately and excluded.
+  Artifact written to `evals/results/meta_agent_eval_2026-07-30_10-13-27.json` — the first
+  result in this project that can be re-plotted without re-running it.
+- **The prompt repair is confirmed working.** The loop block escalates `OK → WARN → ANOMALY`
+  across three byte-identical calls, with confidence dipping to 0.70 on the ambiguous middle
+  case. That is the behaviour the inverted prompt would have destroyed, and it is intact.
+- **One miss:** `output_drifts_from_goal`, expected WARN, returned ANOMALY on a summary that
+  wandered off-goal. A severity disagreement on a borderline case, erring toward over-flagging
+  — the safe direction. Not relabelled: the label is defensible and moving it to match the
+  model is how an eval stops meaning anything.
+- **Open item #4 is answered, and the answer is the weaker one.** `/health` reports
+  `structured_output: json_object`. `llama-3.3-70b-versatile` **rejects** strict `json_schema`,
+  so the downgrade path is what actually runs in every demo. It parsed all 9 verdicts without a
+  single failure, so the mechanism works — but say "JSON mode enforced by the API", not "strict
+  schema enforcement". Anyone can check this in ten seconds with a curl.
+- **Cold start is no longer 6s.** Measured 2.27s at boot, paid by the warm-up thread before
+  anything is on screen.
+- **Live demo run recorded:** 9 events → 2 OK, 2 WARN, 5 ANOMALY. `traces/last_run.json` now
+  holds all 9 events *with* their verdicts, so open item #1 is closed.
+- **The offline fallback is proven, not asserted.** Replayed the recording against a server
+  started with a deliberately invalid `GROQ_API_KEY`: it reproduced the live run exactly
+  (2 OK / 2 WARN / 5 ANOMALY), entries badged `replayed`. Dead wifi and a dead provider are
+  both survivable now.
 
 ### 2026-07-30 — real agent, knowledge graph, and an invalid measurement
 

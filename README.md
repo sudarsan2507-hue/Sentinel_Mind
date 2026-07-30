@@ -45,16 +45,18 @@ Every verdict carries a plain-English explanation and a confidence score.
 
 | Metric | Result |
 |---|---|
-| Verdict latency | *pending re-measurement* (previously p50 0.56s · p95 0.97s) |
-| Accuracy on the labelled eval set | *pending re-measurement* (previously 8–9 / 9 across runs) |
-| Test suite | **32 passing**, offline, no API key required |
+| Verdict latency | **p50 0.62s · p95 1.43s** (p95 = slowest of 9; cold start 2.27s, excluded) |
+| Accuracy on the labelled eval set | **8 / 9** on this run |
+| Test suite | **132 passing**, offline, no API key required |
 
-> ⚠️ **The latency and accuracy figures are stale and must be re-run before they are quoted.**
-> Two reasons, both ours. The system prompt was corrupted between runs in a way that inverted
-> every verdict definition, so any accuracy measured across that window is meaningless. And the
-> p95 was computed one rank too low — on 9 samples it reported the 8th-slowest verdict as the
-> 95th percentile, always understating our own tail. Both are fixed; neither has been
-> re-measured. `python evals/run_eval.py` regenerates them.
+Measured 2026-07-30 against `llama-3.3-70b-versatile`, after the prompt repair and the percentile
+fix. Full artifact in [`evals/results/`](evals/results/) — re-plottable without re-running.
+
+> The one miss was `output_drifts_from_goal`: expected `WARN`, returned `ANOMALY` for a summary
+> that wandered off the session goal. That is a severity disagreement on a genuinely borderline
+> case, not a missed detection — and it is the *safe* direction to err. Accuracy has ranged 8–9/9
+> across runs at `temperature=0`, because LLM inference is not deterministic even when sampling is.
+> Quote it as **"8 of 9 on our labelled set"**, never as "89% accurate".
 
 Reproduce both yourself:
 
@@ -306,6 +308,14 @@ The downgrade fires **only on a 400 that names the format** — not on auth fail
 dropped connections. It is permanent for the life of the process, so downgrading for the wrong
 reason costs strict enforcement for the whole run with nothing to show for it: loose mode works
 fine, so the weaker guarantee is invisible. `GET /health` reports which mode is actually in force.
+
+> **In practice `llama-3.3-70b-versatile` rejects strict `json_schema`, so we run in
+> `json_object` mode.** Verified 2026-07-30: `/health` reports `"structured_output":
+> "json_object"` after the first call. The fallback is doing real work rather than sitting
+> unused — every verdict in the numbers above was parsed from loose JSON mode without a single
+> parse failure. Say "JSON mode enforced by the API, with a schema requested first", not "strict
+> schema enforcement". The mechanism is the same; the guarantee is one notch weaker, and the
+> difference is checkable in ten seconds by anyone who asks.
 
 **The decorator never changes behaviour.** Return values and exceptions pass through untouched. A
 monitoring tool that alters what it monitors isn't monitoring.
