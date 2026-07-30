@@ -51,6 +51,12 @@ KNOWN_TOOLS = [
     # scripted demo pipeline
     "fetch_pricing",
     "summarize",
+    # Registered on purpose. flaky_api is a legitimate-but-unreliable upstream,
+    # which is what it would be in a real pipeline. Leaving it unregistered made
+    # its verdict read as a hallucinated tool, so step 7 of the demo duplicated
+    # step 5 instead of demonstrating a swallowed exception -- three planted
+    # failure modes collapsing into two.
+    "flaky_api",
     # real agent
     "get_order",
     "agent_llm_call",
