@@ -19,8 +19,8 @@ Plan and design decisions live in [PLAN.md](PLAN.md).
 | `backend/knowledge_graph.py` | done — capability-abstracted failure memory, persisted |
 | `frontend/index.html` | done — live graph, verdict feed, goal banner, stat row, REPLAY badge |
 | `evals/` | done — 9 labelled cases + scoring harness + learning experiment |
-| `tests/` | done — **32 / 32 passing** ⚠️ *no coverage for `real_agent.py` or `knowledge_graph.py`* |
-| `README.md` | done — ⚠️ *does not yet document the real agent or the knowledge graph* |
+| `tests/` | done — **132 / 132 passing**; `knowledge_graph.py` 100%, `real_agent.py` 85%, `demo_agent.py` **0%** |
+| `README.md` | done — documents the real agent, knowledge graph, and artifact pipeline |
 | End-to-end demo run | done — **verified live 2026-07-30**, 2 OK · 2 WARN · 5 ANOMALY |
 | Git repository | `adharshan-feature` merged with `origin/main`, **merge not pushed** |
 | Deck updated for Groq | **not done — blocking** |
@@ -38,9 +38,9 @@ documented fallback is what actually runs. Claim JSON mode, not strict schema en
 
 ## Verified
 
-- `pytest tests/ -q` → **20 passed in 1.07s**, offline, no key.
-- `python evals/run_eval.py` → **9/9, p50 0.67s, p95 0.94s.** Clean confusion matrix, no
-  off-diagonal entries.
+- `pytest tests/ -q` → **132 passed in 0.62s**, offline, no key.
+- `python evals/run_eval.py` → **8/9, p50 0.62s, p95 1.43s** (2026-07-30, post-repair). One
+  off-diagonal entry: a WARN case returned ANOMALY. Artifact in `evals/results/`.
 - **Loop detection confirmed working:** across three byte-identical `search_docs` calls the
   verdicts escalate `OK → WARN → ANOMALY`, with confidence dipping to 0.70 on the ambiguous
   middle case. A per-step classifier returns the same verdict for all three. This is the
@@ -51,17 +51,18 @@ documented fallback is what actually runs. Claim JSON mode, not strict schema en
 - Rendered context block for a repeated call carries goal, preceding steps, and
   `"has already occurred N time(s)"` — the loop signal reaching the model as a computed fact.
 
-### Cold start is real — now warmed at boot
+### Cold start — measured, and now paid at boot
 
-The first verdict of any server run took **~6s** (connection setup); every subsequent one was
-under a second. On stage the first node would sit grey noticeably longer than the rest.
-`app.py` now fires `MetaAgent.warm_up()` on a daemon thread at startup, which pays both the
-TLS/pool cost and the strict-schema probe before anyone is watching. Failure is silent by
-design — a server that refuses to start because the provider is unreachable would break
-offline replay, which is precisely the mode you need when the provider is unreachable.
+The first verdict of any server run used to take **~6s** (connection setup); every subsequent
+one was under a second. On stage the first node would sit grey noticeably longer than the rest.
+`app.py` now fires `MetaAgent.warm_up()` on a daemon thread at startup, paying both the TLS/pool
+cost and the format probe before anyone is watching. Failure is silent by design — a server that
+refuses to start because the provider is unreachable would break offline replay, which is
+precisely the mode you need when the provider is unreachable.
 
-Not yet re-measured against the live API; the warm-up path is verified only against an
-unreachable provider (it degrades and the server still starts).
+**Re-measured live 2026-07-30: 2.27s**, not the ~6s recorded earlier, and it no longer lands on
+the first verdict. The eval reports it on its own line rather than folding it into the latency
+distribution — excluding it silently would flatter the numbers.
 
 ---
 
