@@ -92,6 +92,28 @@ STRICT_FORMAT = {
 LOOSE_FORMAT = {"type": "json_object"}
 
 
+def _is_rate_limit(exc: Exception) -> bool:
+    """Detect a 429 without importing the SDK's exception hierarchy, so a faked
+    client in tests can raise anything shaped like one."""
+    if getattr(exc, "status_code", None) == 429:
+        return True
+    return "rate limit" in str(exc).lower() or "429" in str(exc)
+
+
+def _retry_after(exc: Exception, default: float) -> float:
+    """Honour the server's Retry-After header when it gives us one."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None) or {}
+    for key in ("retry-after", "Retry-After", "x-ratelimit-reset-requests"):
+        raw = headers.get(key) if hasattr(headers, "get") else None
+        if raw:
+            try:
+                return float(str(raw).rstrip("s"))
+            except ValueError:
+                continue
+    return default
+
+
 class MetaAgent:
     """Evaluates trace events against the healthy-reasoning prompt.
 
@@ -112,11 +134,13 @@ class MetaAgent:
         known_tools: list[str] | None = None,
         confidence_threshold: float = 0.0,
         model: str = MODEL,
+        rate_limit_retries: int = 3,
     ) -> None:
         self._client = client
         self.known_tools = known_tools or []
         self.confidence_threshold = confidence_threshold
         self.model = model
+        self.rate_limit_retries = rate_limit_retries
         # None = untested, True = model accepts json_schema, False = downgraded.
         self._strict_ok: bool | None = None
 
@@ -142,16 +166,31 @@ class MetaAgent:
         return "\n\n".join(parts)
 
     def _call(self, event: dict, response_format: dict, context: Any | None) -> Any:
-        return self.client.chat.completions.create(
-            model=self.model,
-            max_tokens=512,
-            temperature=0,  # a verdict should not vary run to run
-            response_format=response_format,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": self._prompt_for(event, context)},
-            ],
-        )
+        """One judging call, with backoff on rate limits.
+
+        A 429 is transient, not a failure -- degrading to WARN on the first one
+        silently blinds the monitor for the rest of a burst, and because degraded
+        verdicts can never be ANOMALY, it makes a rate-limited run look healthy.
+        That is a far worse outcome than waiting a second.
+        """
+        attempts = self.rate_limit_retries + 1
+        for attempt in range(attempts):
+            try:
+                return self.client.chat.completions.create(
+                    model=self.model,
+                    max_tokens=512,
+                    temperature=0,  # a verdict should not vary run to run
+                    response_format=response_format,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": self._prompt_for(event, context)},
+                    ],
+                )
+            except Exception as exc:
+                if not _is_rate_limit(exc) or attempt == attempts - 1:
+                    raise
+                time.sleep(min(_retry_after(exc, default=2.0 * (attempt + 1)), 30.0))
+        raise RuntimeError("unreachable")  # pragma: no cover
 
     def evaluate(self, event: dict, context: Any | None = None) -> dict:
         """Judge one trace event. Always returns a verdict dict -- never raises.
