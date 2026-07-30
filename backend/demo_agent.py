@@ -3,13 +3,27 @@
 Runs a support-assistant pipeline whose steps deliberately produce one of each
 verdict, so the dashboard shows green, amber, and red in a single run:
 
-    1. search_docs        -> OK        healthy tool call
-    2. lookup_customer    -> OK        healthy tool call
-    3. fetch_pricing      -> WARN      unusually slow
-    4. summarize          -> WARN      output only loosely related to input
-    5. delete_user_record -> ANOMALY   hallucinated tool, not in the registry
-    6. fetch_pricing x3   -> ANOMALY   repeated identical call, an infinite loop
-    7. flaky_api          -> ANOMALY   raises an exception
+     1. search_docs             -> OK        healthy tool call
+     2. lookup_customer         -> OK        healthy tool call
+     3. fetch_pricing           -> WARN      unusually slow
+     4. summarize               -> WARN      output only loosely related to input
+     5. delete_user_record      -> ANOMALY   hallucinated: delete_records
+     6. issue_refund            -> ANOMALY   hallucinated: issue_refunds
+     7. notify_customer         -> ANOMALY   hallucinated: notify_customers
+     8. escalate_to_supervisor  -> ANOMALY   hallucinated: escalate_to_a_human
+     9. fetch_pricing x3        -> ANOMALY   repeated identical call, a loop
+    10. flaky_api               -> ANOMALY   raises; the agent swallows it
+
+Steps 5-8 each reach for a *different* capability on purpose. The knowledge graph
+abstracts an invented tool to the capability behind it, so four distinct
+capabilities produce four capability nodes and four separate lessons -- where four
+refund-flavoured names would collapse into one. A graph with one node teaches
+nothing and demonstrates nothing.
+
+That escalation is not invented for the demo. It is the pattern the *real* agent
+in ``real_agent.py`` actually produced when cornered: it invented refund,
+notification, and escalation endpoints in turn, then looped. This pipeline
+reproduces that deterministically so it happens on cue.
 
 Usage:
     python demo_agent.py             # live: emit traces, server judges them
@@ -112,12 +126,41 @@ def summarize(text: str) -> str:
     return "The customer seems interested in upgrading to a hardware bundle."
 
 
+# Steps 5-8: four capabilities the agent does not have, reached for in turn.
+# None are in the server's registry, so each is a hallucination -- and each maps
+# to a different capability, which is what makes the knowledge graph branch
+# instead of stacking counters on one node.
+
+
 @monitor(tool_name="delete_user_record")
 def delete_user_record(customer_id: str) -> str:
-    # ANOMALY: this tool is not in the server's registry. A real agent reaching
-    # for it means the model invented a capability it does not have.
+    # ANOMALY: hallucinated -> delete_records
     time.sleep(0.04)
     return f"deleted {customer_id}"
+
+
+@monitor(tool_name="issue_refund")
+def issue_refund(order_id: str, amount_usd: float) -> str:
+    # ANOMALY: hallucinated -> issue_refunds. The task it was given needs this
+    # and there is no tool for it, which is exactly when a model invents one.
+    time.sleep(0.05)
+    return f"refunded ${amount_usd} on {order_id}"
+
+
+@monitor(tool_name="notify_customer")
+def notify_customer(customer_id: str, message: str) -> str:
+    # ANOMALY: hallucinated -> notify_customers. Note it is telling the customer
+    # about a refund whose eligibility was never established.
+    time.sleep(0.04)
+    return f"notified {customer_id}: {message}"
+
+
+@monitor(tool_name="escalate_to_supervisor")
+def escalate_to_supervisor(customer_id: str, reason: str) -> str:
+    # ANOMALY: hallucinated -> escalate_to_a_human. The last thing it tries once
+    # the invented actions fail.
+    time.sleep(0.04)
+    return f"escalated {customer_id} ({reason})"
 
 
 @monitor(tool_name="flaky_api")
@@ -152,13 +195,25 @@ def run_pipeline() -> None:
     delete_user_record("cus_88213")
     time.sleep(0.6)
 
-    print("\n[6] Agent loops on the same call")
+    print("\n[6] And another -- it tries to issue the refund itself")
+    issue_refund("ord_5512", 149.00)
+    time.sleep(0.6)
+
+    print("\n[7] And another -- telling the customer it is done")
+    notify_customer("cus_88213", "Your refund has been processed.")
+    time.sleep(0.6)
+
+    print("\n[8] And another -- handing off to a human that does not exist")
+    escalate_to_supervisor("cus_88213", "refund_window_dispute")
+    time.sleep(0.6)
+
+    print("\n[9] Agent loops on the same call")
     for _ in range(3):
         fetch_pricing("SKU-4471")
         time.sleep(0.35)
     time.sleep(0.3)
 
-    print("\n[7] Upstream failure")
+    print("\n[10] Upstream failure")
     try:
         flaky_api("/v1/entitlements")
     except ConnectionError:
