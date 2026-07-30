@@ -254,7 +254,7 @@ def save_recording(path: Path) -> None:
         entries = [{"event": e, "verdict": None} for e in _recorded]
 
     payload = [{"event": e.get("event"), "verdict": e.get("verdict")} for e in entries]
-    path.parent.mkdir(exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
 
     judged = sum(1 for e in payload if e["verdict"])

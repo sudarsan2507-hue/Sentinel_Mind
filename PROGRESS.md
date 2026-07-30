@@ -19,13 +19,14 @@ Plan and design decisions live in [PLAN.md](PLAN.md).
 | `backend/knowledge_graph.py` | done — capability-abstracted failure memory, persisted |
 | `frontend/index.html` | done — live graph, verdict feed, goal banner, stat row, REPLAY badge |
 | `evals/` | done — 9 labelled cases + scoring harness + learning experiment |
-| `tests/` | done — **132 / 132 passing**; `knowledge_graph.py` 100%, `real_agent.py` 85%, `demo_agent.py` **0%** |
+| `tests/` | done — **151 / 151 passing**; backend coverage 84% |
 | `README.md` | done — documents the real agent, knowledge graph, and artifact pipeline |
 | End-to-end demo run | done — **verified live 2026-07-30**, 2 OK · 2 WARN · 5 ANOMALY |
-| Git repository | `adharshan-feature` merged with `origin/main`, **merge not pushed** |
+| Git repository | `adharshan-feature` merged with `origin/main` and **pushed** |
+| `DEMO.md` | done — pre-flight, script, fallback table, wording guardrails |
 | Deck updated for Groq | **not done — blocking** |
 
-**Tests passing:** 132 / 132 (deck says 15 — needs a one-word edit)
+**Tests passing:** 151 / 151 (deck says 15 — needs a one-word edit)
 **Eval accuracy:** **8 / 9** — re-measured 2026-07-30 after the prompt repair, with the corrected
 percentile. One miss, `output_drifts_from_goal` (WARN expected, ANOMALY returned).
 **Verdict latency:** **p50 0.62s · p95 1.43s**, cold start 2.27s measured separately and excluded.
@@ -38,13 +39,21 @@ documented fallback is what actually runs. Claim JSON mode, not strict schema en
 
 ## Verified
 
-- `pytest tests/ -q` → **132 passed in 0.62s**, offline, no key.
+- `pytest tests/ -q` → **151 passed in 0.71s**, offline, no key. Backend coverage 84%.
 - `python evals/run_eval.py` → **8/9, p50 0.62s, p95 1.43s** (2026-07-30, post-repair). One
   off-diagonal entry: a WARN case returned ANOMALY. Artifact in `evals/results/`.
-- **Loop detection confirmed working:** across three byte-identical `search_docs` calls the
-  verdicts escalate `OK → WARN → ANOMALY`, with confidence dipping to 0.70 on the ambiguous
-  middle case. A per-step classifier returns the same verdict for all three. This is the
-  clearest evidence that session context does what §4a of PLAN.md claims.
+- **Loop detection confirmed working:** in the **eval**, across three byte-identical
+  `search_docs` calls, the verdicts escalate `OK → WARN → ANOMALY`, with confidence dipping to
+  0.70 on the ambiguous middle case. A per-step classifier returns the same verdict for all
+  three. This is the clearest evidence that session context does what §4a of PLAN.md claims.
+
+  ⚠️ **The escalation is visible in the eval, not in the demo pipeline.** In `demo_agent.py`
+  all three loop calls come back ANOMALY, because a hallucinated-tool ANOMALY is already in the
+  session window by the time the loop starts, so the first repeat is judged against an already
+  unhealthy run. The loop is still *named* in the explanations ("called with the same input
+  multiple times in a row, indicating a potential infinite loop"), so the demo is honest — but
+  narrating an escalation over a screen showing three reds is not. `DEMO.md` says which to show
+  when. Caught during a dress rehearsal, not on camera.
 - **Live demo run against the real API:** 9 events → 2 OK, 2 WARN, 5 ANOMALY, with genuine
   explanations ("has been called repeatedly with the same input, indicating an infinite
   loop"). Verdict latency 0.3–0.8s steady-state.
@@ -70,7 +79,7 @@ distribution — excluding it silently would flatter the numbers.
 
 1. **Update the deck — blocking, and now the only thing between here and done.** Slide 4 says
    "Meta-Agent: Claude Sonnet"; reference [1] cites Anthropic docs and `claude-sonnet-4-6`.
-   Both wrong. Slide 7 needs a Groq reference. Test count says 15, actual is **132**. The
+   Both wrong. Slide 7 needs a Groq reference. Test count says 15, actual is **151**. The
    impact slide can say **p95 1.43s** — measured, not asserted.
 2. **Diagnose the file corruption — still unresolved after two incidents.** It hit the system
    prompt on 2026-07-30, which no test would have caught. There is now a prompt-integrity
@@ -81,7 +90,7 @@ distribution — excluding it silently would flatter the numbers.
    injection all work. The effect on failure rate has never been measured without rate-limit
    contamination. `evals/run_learning_experiment.py --runs 3` needs ~25–30k tokens against a
    100k daily cap. **Do not claim the loop reduces failures until this prints a number.**
-5. **`demo_agent.py` has 0% test coverage** — and it is the file that runs on stage.
+5. ~~`demo_agent.py` has 0% coverage~~ — closed 2026-07-30, now 85%.
 6. **LangChain wiring.** Deck names it as the monitored framework; the demo wraps plain
    Python callables. `@monitor` is framework-agnostic so it's a small job — either wire it
    or adjust the slide.
