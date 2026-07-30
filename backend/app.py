@@ -44,10 +44,17 @@ load_dotenv(ROOT / ".env")
 # endpoint the agent invents will not appear here, which is what makes an
 # invented capability detectable rather than merely suspicious.
 KNOWN_TOOLS = [
+    # shared
     "search_docs",
+    "lookup_customer",
+    # scripted demo pipeline
     "fetch_pricing",
     "summarize",
-    "lookup_customer",
+    # real agent
+    "get_order",
+    "agent_llm_call",
+    "internal_api:/v1/orders/list",
+    "internal_api:/v1/customers/search",
 ]
 
 
