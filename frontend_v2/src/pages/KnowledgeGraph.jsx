@@ -107,16 +107,56 @@ export default function KnowledgeGraphPage() {
   const [selectedNode, setSelectedNode] = useState(null);
   const [filter, setFilter] = useState('all');
   const [lastLearnedTs, setLastLearnedTs] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [error, setError] = useState(null);
 
+  /* A button that succeeds silently is indistinguishable from a broken one.
+     Every action reports: busy while in flight, a timestamp on success, and the
+     server's own message on failure. */
   const refresh = useCallback(() => {
+    setBusy(true);
+    setError(null);
     fetch('/knowledge')
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`GET /knowledge returned ${r.status}`);
+        return r.json();
+      })
       .then((d) => {
         setData(d);
-        setLoading(false);
+        setLastUpdated(new Date());
       })
-      .catch(() => setLoading(false));
+      .catch((e) => setError(e.message))
+      .finally(() => {
+        setLoading(false);
+        setBusy(false);
+      });
   }, []);
+
+  /* Clear sent no body, so the backend rejected it with 400 and the page
+     refreshed unchanged -- a silent no-op that looked like a dead button.
+     The confirm flag is required precisely because this is destructive. */
+  const clearMemory = useCallback(() => {
+    if (!window.confirm('Delete all accumulated failure memory? This cannot be undone.')) return;
+    setBusy(true);
+    setError(null);
+    fetch('/knowledge/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true }),
+    })
+      .then(async (r) => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.error || `POST /knowledge/clear returned ${r.status}`);
+        }
+      })
+      .then(refresh)
+      .catch((e) => {
+        setError(e.message);
+        setBusy(false);
+      });
+  }, [refresh]);
 
   /* Initial load */
   useEffect(() => { refresh(); }, [refresh]);
@@ -176,15 +216,27 @@ export default function KnowledgeGraphPage() {
               {connected ? 'Live' : 'Disconnected'}
             </span>
           </div>
+          {error && (
+            <span className="font-label-sm text-[10px] text-error max-w-[280px] truncate" title={error}>
+              ⚠ {error}
+            </span>
+          )}
+          {!error && lastUpdated && (
+            <span className="font-label-sm text-[10px] text-on-surface-variant/50">
+              updated {lastUpdated.toLocaleTimeString()}
+            </span>
+          )}
           <button
             onClick={refresh}
-            className="px-3 py-1.5 bg-surface-container-high/50 border border-outline-variant/20 rounded-lg font-label-sm text-[11px] text-on-surface hover:bg-surface-variant transition-colors"
+            disabled={busy}
+            className="px-3 py-1.5 bg-surface-container-high/50 border border-outline-variant/20 rounded-lg font-label-sm text-[11px] text-on-surface hover:bg-surface-variant transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            Refresh
+            {busy ? 'Refreshing…' : 'Refresh'}
           </button>
           <button
-            onClick={() => { fetch('/knowledge/clear', { method: 'POST' }).then(refresh); }}
-            className="px-3 py-1.5 bg-error/10 border border-error/20 rounded-lg font-label-sm text-[11px] text-error hover:bg-error/20 transition-colors"
+            onClick={clearMemory}
+            disabled={busy}
+            className="px-3 py-1.5 bg-error/10 border border-error/20 rounded-lg font-label-sm text-[11px] text-error hover:bg-error/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Clear Memory
           </button>
