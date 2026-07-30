@@ -13,6 +13,10 @@ venv/
 # Recorded traces may contain real pipeline inputs/outputs
 traces/
 
+# Accumulated failure memory -- same reason as traces/: it stores the monitored
+# agent's real tool calls, and it is machine-local state, not source.
+knowledge/
+
 # OS / editor
 .DS_Store
 Thumbs.db

@@ -231,7 +231,21 @@ def create_app(
 
     @app.post("/knowledge/clear")
     def knowledge_clear():
-        """Reset accumulated memory -- needed to measure a cold baseline."""
+        """Reset accumulated memory -- needed to measure a cold baseline.
+
+        Requires ``{"confirm": true}``. Unlike ``/audit/clear``, which drops one
+        run's verdicts, this deletes the graph file and every lesson learned
+        across all previous runs -- memory that costs real tokens to rebuild, and
+        that the free tier's daily cap makes expensive to rebuild twice. An
+        explicit flag means a stray POST, or a dashboard button wired without
+        thinking, cannot silently erase it.
+        """
+        payload = request.get_json(silent=True) or {}
+        if payload.get("confirm") is not True:
+            return jsonify(
+                {"error": "expected {\"confirm\": true} -- this deletes all accumulated memory"}
+            ), 400
+
         app.config["KNOWLEDGE"].clear()
         socketio.emit("knowledge_cleared", {})
         return jsonify({"cleared": True}), 200
