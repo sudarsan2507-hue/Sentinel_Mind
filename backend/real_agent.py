@@ -152,7 +152,19 @@ def declare_goal(goal: str) -> None:
         print(f"  ! could not declare goal: {exc}", file=sys.stderr)
 
 
-_PENDING_LEARN_HOOK = True  # placeholder: lesson feedback lands in a later commit
+def fetch_lessons() -> str:
+    """Pull what SentinelMind has learned from previous runs.
+
+    This is the closed loop: the monitoring layer observed the failures, and the
+    agent now reads them back before acting. No weights change -- the memory
+    lives in the prompt.
+    """
+    try:
+        resp = requests.get(f"{SERVER}/knowledge/lessons", timeout=5)
+        return resp.json().get("prompt_block", "")
+    except (requests.RequestException, ValueError) as exc:
+        print(f"  ! could not fetch lessons: {exc}", file=sys.stderr)
+        return ""
 
 
 # --------------------------------------------------------------------------
@@ -376,6 +388,11 @@ def main() -> None:
     parser.add_argument("--goal", default=GOAL, help="what SentinelMind judges drift against")
     parser.add_argument("--max-steps", type=int, default=10)
     parser.add_argument("--server", default=SERVER)
+    parser.add_argument(
+        "--learn",
+        action="store_true",
+        help="inject lessons SentinelMind learned from previous runs into the agent's prompt",
+    )
     args = parser.parse_args()
 
     SERVER = args.server
@@ -384,11 +401,12 @@ def main() -> None:
         sys.exit("GROQ_API_KEY is not set. The agent needs a real model to be real.")
 
     declare_goal(args.goal)
+    lessons = fetch_lessons() if args.learn else ""
 
     subscribe(send)
     subscribe(announce)
 
-    run_agent(args.task, args.max_steps)
+    run_agent(args.task, args.max_steps, lessons)
 
 
 if __name__ == "__main__":
