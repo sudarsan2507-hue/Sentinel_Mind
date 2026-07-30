@@ -129,12 +129,23 @@ class KnowledgeGraph:
             # A corrupt store must not stop the server. Start fresh; losing
             # accumulated memory is recoverable, refusing to boot is not.
             return
-        for n in raw.get("nodes", []):
-            self._nodes[(n["type"], n["id"])] = n
-        for e in raw.get("edges", []):
-            key = ((e["src_type"], e["src_id"]), e["relation"], (e["dst_type"], e["dst_id"]))
-            self._edges[key] = e["count"]
-        self._runs = raw.get("runs", 0)
+        # Well-formed JSON of the wrong shape is still a corrupt store. Catching
+        # only JSONDecodeError above left a file containing `[]` -- or an entry
+        # missing a key -- to raise here, and this runs during __init__, which
+        # runs at import and in create_app. That is a server that will not boot.
+        if not isinstance(raw, dict):
+            return
+        try:
+            for n in raw.get("nodes", []):
+                self._nodes[(n["type"], n["id"])] = n
+            for e in raw.get("edges", []):
+                key = ((e["src_type"], e["src_id"]), e["relation"], (e["dst_type"], e["dst_id"]))
+                self._edges[key] = e["count"]
+        except (KeyError, TypeError):
+            self._nodes.clear()  # partial load is worse than none -- it looks valid
+            self._edges.clear()
+            return
+        self._runs = raw.get("runs", 0) if isinstance(raw.get("runs"), int) else 0
 
     def save(self) -> None:
         with self._lock:
