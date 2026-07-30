@@ -44,8 +44,36 @@ button before you hit record.
 
 | Mode | Command | Use when |
 |---|---|---|
-| **Live** | `python demo_agent.py` | The network is good and you want a genuinely live run |
 | **Offline** ✅ | `python demo_agent.py --offline` | **Recommended for recording** |
+| **Live scripted** | `python demo_agent.py` | The network is good and you want a genuinely live run |
+| **Live real agent** | `python real_agent.py` | Answering *"is the agent real?"* — see below |
+
+### If a judge asks whether the monitored agent is real
+
+`demo_agent.py` is a scripted mock: hardcoded returns, a `for` loop standing in
+for a loop, an unregistered function name standing in for a hallucination. It
+exists because a demo needs its failures on cue. Say that plainly if asked —
+it is not a weakness, it is a controlled subject.
+
+Then run the answer:
+
+```bash
+python real_agent.py
+```
+
+That is a genuine tool-calling agent on `llama-3.1-8b-instant`, given a task it
+cannot complete with the tools it has. It invents endpoints, loops, and gives up
+entirely on its own. Observed across runs: invented `/v1/orders/refund`,
+`/v1/notifications/send`, `/v1/support/escalate`; looped on `lookup_customer`
+three times; and hallucinated a $100 refund on a $149 order.
+
+**Watch the Knowledge Graph page while it runs.** The real agent invents a
+*different* endpoint almost every time, so new nodes appear as it fails — the
+graph grows in shape, not just in counters. The scripted demo always produces
+the same eleven nodes, which makes a live graph look static even though it isn't.
+
+Use this take second. It is a real model at temperature 0.7, so it will not do
+the same thing twice, and it costs roughly 15k tokens per run.
 
 **Record with `--offline`.** It replays verdicts captured from a real run, so
 every take is byte-identical — a retake is not a fresh roll of the dice with a
@@ -200,10 +228,14 @@ exhausted quota, and a broken pipeline. If it is running, you have a demo.
 - **The learning loop is unproven.** Built and verified working; effect
   unmeasured. Do not claim it reduces failures.
 - **Nine eval cases** is a demonstration, not a generalisation.
-- **The knowledge graph has no UI yet** — it is real and tested, but it lives
-  in `/knowledge` and the terminal. Show it with a `curl` if asked, or skip it.
+- **`demo_agent.py` is a scripted mock.** Say so if asked, then run
+  `real_agent.py` — that one is a real model failing on its own.
+- **The scripted demo always builds the same eleven graph nodes.** Counts move,
+  structure does not. Run the real agent if you want the graph to grow visibly.
 - **LangChain is not wired.** `@monitor` is framework-agnostic, but that path
   is not written or tested.
+- **The dashboard needs a build.** `frontend_v2/dist` is gitignored, so a fresh
+  clone needs `npm install && npm run build` or `/` returns 404.
 
 Naming a limitation before a judge finds it is what makes the rest of the
 numbers credible.

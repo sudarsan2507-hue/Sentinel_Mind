@@ -132,7 +132,7 @@ A per-step classifier returns the same verdict three times.
 
 ## Quick start
 
-**Requires** Python 3.11+ and a free [Groq](https://console.groq.com) API key.
+**Requires** Python 3.11+, Node 18+, and a free [Groq](https://console.groq.com) API key.
 
 ```bash
 git clone <your-repo-url>
@@ -146,6 +146,17 @@ py -3 -m venv .venv
 
 cp .env.example .env          # Windows: copy .env.example .env
 # paste your GROQ_API_KEY into .env — it is gitignored, never commit it
+```
+
+**Build the dashboard.** The server serves `frontend_v2/dist`, which is a build
+artifact and deliberately not in git. Skip this and `/` returns 404 — there is no
+pre-built copy to fall back on:
+
+```bash
+cd frontend_v2
+npm install
+npm run build
+cd ..
 ```
 
 Run the server:
@@ -245,7 +256,7 @@ Sentinel-Mind/
 │   ├── demo_agent.py        scripted pipeline — reliable stage demo
 │   └── real_agent.py        a genuine tool-calling agent that fails unscripted
 ├── frontend/
-│   └── index.html           React + vis.js, no build step
+│   └── index.html           legacy single-file dashboard (no build step)
 ├── evals/
 │   ├── cases.py             9 labelled cases with written rationales
 │   ├── run_eval.py          accuracy, confusion matrix, p50/p95 latency
