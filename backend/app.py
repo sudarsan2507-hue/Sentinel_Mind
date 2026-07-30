@@ -24,6 +24,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO
 
 from audit_log import AuditLog
+from knowledge_graph import KnowledgeGraph
 from meta_agent import MetaAgent
 from session_context import SessionContext
 
@@ -33,9 +34,15 @@ FRONTEND_DIR = ROOT / 'frontend'
 # Load GROQ_API_KEY from the repo-root .env before MetaAgent builds its client.
 load_dotenv(ROOT / ".env")
 
-# Tools the demo pipeline is allowed to call. Anything outside this set is a
-# hallucinated tool call; the registry is passed to the meta-agent so it can say
-# so by name.
+# Tools the monitored pipelines are allowed to call. Anything outside this set is
+# a hallucinated tool call; the registry is passed to the meta-agent so it can
+# name the offending tool in its explanation.
+#
+# Covers both subjects: demo_agent.py (scripted, for reliable stage demos) and
+# real_agent.py (a genuine tool-calling LLM agent). Endpoints reachable through
+# the real agent's internal-API dispatcher are registered individually -- an
+# endpoint the agent invents will not appear here, which is what makes an
+# invented capability detectable rather than merely suspicious.
 KNOWN_TOOLS = [
     "search_docs",
     "fetch_pricing",
@@ -47,12 +54,16 @@ KNOWN_TOOLS = [
 def create_app(
     meta_agent: MetaAgent | None = None,
     audit_log: AuditLog | None = None,
+    knowledge_graph: KnowledgeGraph | None = None,
 ) -> tuple[Flask, SocketIO]:
     """Build the app. Dependencies are injectable so tests can pass fakes."""
     app = Flask(__name__, static_folder=None)
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
     app.config["AUDIT_LOG"] = audit_log or AuditLog()
+    # Accumulated failure memory. Injected so tests get a throwaway graph and
+    # never touch the persisted one on disk.
+    app.config["KNOWLEDGE"] = knowledge_graph or KnowledgeGraph()
     app.config["META_AGENT"] = meta_agent or MetaAgent(
         known_tools=KNOWN_TOOLS,
         confidence_threshold=float(os.environ.get("SENTINEL_CONFIDENCE_THRESHOLD", 0.0)),
@@ -80,6 +91,14 @@ def create_app(
                 entry = app.config["AUDIT_LOG"].record(event, verdict)
                 socketio.emit("verdict", entry)
                 socketio.emit("summary", app.config["AUDIT_LOG"].summary())
+
+                # Turn detection into memory. Only mistakes are remembered, and
+                # only ones we actually judged -- see KnowledgeGraph.ingest.
+                graph: KnowledgeGraph = app.config["KNOWLEDGE"]
+                learned = graph.ingest(event, verdict, KNOWN_TOOLS, session.goal)
+                if learned:
+                    graph.save()
+                    socketio.emit("learned", {**learned, "summary": graph.summary()})
             except Exception as exc:
                 # Never let one bad event kill the worker and silently stop all
                 # monitoring -- that is the exact failure mode we exist to catch.
@@ -129,6 +148,7 @@ def create_app(
         session: SessionContext = app.config["SESSION"]
         session.goal = goal
         session.clear()  # a new goal is a new run
+        app.config["KNOWLEDGE"].start_run()
         socketio.emit("goal", {"goal": goal})
         return jsonify({"goal": goal}), 200
 
@@ -142,6 +162,33 @@ def create_app(
                 "recent": session.recent(),
             }
         ), 200
+
+    @app.get("/knowledge")
+    def knowledge():
+        """The accumulated failure graph: nodes, edges, and derived lessons."""
+        graph: KnowledgeGraph = app.config["KNOWLEDGE"]
+        return jsonify(
+            {
+                "summary": graph.summary(),
+                "lessons": graph.lessons(),
+                **graph.snapshot(),
+            }
+        ), 200
+
+    @app.get("/knowledge/lessons")
+    def knowledge_lessons():
+        """What a monitored agent fetches to avoid repeating past mistakes."""
+        graph: KnowledgeGraph = app.config["KNOWLEDGE"]
+        return jsonify(
+            {"lessons": graph.lessons(), "prompt_block": graph.lesson_block()}
+        ), 200
+
+    @app.post("/knowledge/clear")
+    def knowledge_clear():
+        """Reset accumulated memory -- needed to measure a cold baseline."""
+        app.config["KNOWLEDGE"].clear()
+        socketio.emit("knowledge_cleared", {})
+        return jsonify({"cleared": True}), 200
 
     @app.get("/audit")
     def audit():
