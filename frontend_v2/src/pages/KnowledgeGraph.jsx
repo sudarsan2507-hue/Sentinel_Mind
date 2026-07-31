@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 
@@ -113,11 +113,18 @@ export default function KnowledgeGraphPage() {
 
   /* A button that succeeds silently is indistinguishable from a broken one.
      Every action reports: busy while in flight, a timestamp on success, and the
-     server's own message on failure. */
-  const refresh = useCallback(() => {
-    setBusy(true);
-    setError(null);
-    fetch('/knowledge')
+     server's own message on failure.
+
+     `announce` exists so the mount effect can fetch WITHOUT setting state
+     synchronously in the effect body -- that cascades renders, and React's lint
+     rule flags it. State set inside the promise callbacks is async and fine;
+     only the busy/error reset up front was the problem. */
+  const load = useCallback((announce) => {
+    if (announce) {
+      setBusy(true);
+      setError(null);
+    }
+    return fetch('/knowledge')
       .then((r) => {
         if (!r.ok) throw new Error(`GET /knowledge returned ${r.status}`);
         return r.json();
@@ -125,6 +132,7 @@ export default function KnowledgeGraphPage() {
       .then((d) => {
         setData(d);
         setLastUpdated(new Date());
+        setError(null);
       })
       .catch((e) => setError(e.message))
       .finally(() => {
@@ -132,6 +140,9 @@ export default function KnowledgeGraphPage() {
         setBusy(false);
       });
   }, []);
+
+  /* What the Refresh button calls: the same fetch, but it reports it is working. */
+  const refresh = useCallback(() => load(true), [load]);
 
   /* Clear sent no body, so the backend rejected it with 400 and the page
      refreshed unchanged -- a silent no-op that looked like a dead button.
@@ -158,12 +169,17 @@ export default function KnowledgeGraphPage() {
       });
   }, [refresh]);
 
-  /* Initial load */
-  useEffect(() => { refresh(); }, [refresh]);
+  /* Initial load. `false` skips the busy/error reset, so nothing is set
+     synchronously here -- every setState in load() happens inside a promise
+     callback, which is the subscribe-to-an-external-system pattern the rule
+     exists to allow. The rule cannot see through the guard, so it is silenced
+     with the reason rather than contorting correct code to satisfy it. */
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { load(false); }, [load]);
 
   /* Auto-refresh when backend learns something new */
   useEffect(() => {
-    const off = on('learned', (d) => {
+    const off = on('learned', () => {
       setLastLearnedTs(Date.now());
       refresh();
     });
@@ -227,7 +243,7 @@ export default function KnowledgeGraphPage() {
             </span>
           )}
           <button
-            onClick={refresh}
+            onClick={() => refresh()}
             disabled={busy}
             className="px-3 py-1.5 bg-surface-container-high/50 border border-outline-variant/20 rounded-lg font-label-sm text-[11px] text-on-surface hover:bg-surface-variant transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
