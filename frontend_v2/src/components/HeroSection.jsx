@@ -1,5 +1,4 @@
-import React from 'react';
-
+﻿
 const HeroSection = () => {
   return (
     <header className="relative pt-32 pb-20 overflow-hidden flex flex-col items-center text-center">

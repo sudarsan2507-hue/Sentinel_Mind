@@ -1,5 +1,4 @@
-import React from 'react';
-import { Zap, Cpu, Database } from 'lucide-react';
+﻿import { Zap, Cpu, Database } from 'lucide-react';
 
 export default function Capabilities() {
   const capabilities = [

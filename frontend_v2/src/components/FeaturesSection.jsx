@@ -1,5 +1,4 @@
-import React from 'react';
-
+﻿
 const FeaturesSection = () => {
   return (
     <section className="py-24 px-margin-mobile md:px-margin-desktop max-w-container-max mx-auto">

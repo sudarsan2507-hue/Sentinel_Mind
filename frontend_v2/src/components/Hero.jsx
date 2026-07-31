@@ -1,5 +1,4 @@
-import React from 'react';
-import { motion } from 'framer-motion';
+﻿import { motion } from 'framer-motion';
 import { Sparkles, ExternalLink } from 'lucide-react';
 import TraceSimulator from './TraceSimulator';
 
@@ -15,7 +14,7 @@ export default function Hero() {
           className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-slate-800/80 border border-slate-700 text-xs font-medium text-blue-300 mb-6 shadow-sm"
         >
           <Sparkles className="w-3.5 h-3.5 text-blue-400" />
-          <span>FRONTIER 2026 • AI Safety & Observability Track</span>
+          <span>FRONTIER 2026 â€¢ AI Safety & Observability Track</span>
         </motion.div>
 
         <motion.h1 
@@ -36,7 +35,7 @@ export default function Hero() {
           transition={{ duration: 0.6, delay: 0.2 }}
           className="text-lg text-slate-300 max-w-2xl mx-auto leading-relaxed mb-10"
         >
-          LLM agents fail silently—hallucinating tools, stuck in infinite loops, or drifting from goals. 
+          LLM agents fail silentlyâ€”hallucinating tools, stuck in infinite loops, or drifting from goals. 
           <strong className="text-white font-semibold"> SentinelMind</strong> judges every step in real time with a 70B meta-agent and distilled failure memory.
         </motion.p>
 
