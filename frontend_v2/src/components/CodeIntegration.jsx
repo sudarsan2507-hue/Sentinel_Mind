@@ -1,5 +1,4 @@
-import React from 'react';
-import { Code2, CheckCircle2 } from 'lucide-react';
+﻿import { Code2, CheckCircle2 } from 'lucide-react';
 
 export default function CodeIntegration() {
   const codeSnippet = `from decorator import monitor

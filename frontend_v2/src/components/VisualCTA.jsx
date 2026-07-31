@@ -1,5 +1,4 @@
-import React from 'react';
-
+﻿
 const VisualCTA = () => {
   return (
     <section className="py-24 px-margin-mobile md:px-margin-desktop max-w-container-max mx-auto overflow-hidden">

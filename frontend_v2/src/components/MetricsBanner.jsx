@@ -1,9 +1,8 @@
-import React from 'react';
-
+﻿
 export default function MetricsBanner() {
   const metrics = [
     { label: 'p50 Verdict Latency', value: '0.56s', color: 'text-white' },
-    { label: 'Labelled Eval Score', value: '8–9 / 9', color: 'text-emerald-400' },
+    { label: 'Labelled Eval Score', value: '8â€“9 / 9', color: 'text-emerald-400' },
     { label: 'Offline Test Suite', value: '20 / 20', color: 'text-blue-400' },
     { label: 'Agent POST Overhead', value: '< 1ms', color: 'text-indigo-400' },
   ];

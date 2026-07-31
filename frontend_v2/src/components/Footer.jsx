@@ -1,5 +1,4 @@
-import React from 'react';
-
+﻿
 const Footer = () => {
   return (
     <footer className="w-full py-12 px-margin-mobile md:px-margin-desktop bg-surface-container-lowest border-t border-outline-variant/20">
@@ -30,7 +29,7 @@ const Footer = () => {
         </div>
       </div>
       <div className="max-w-container-max mx-auto mt-12 pt-8 border-t border-outline-variant/10 flex justify-between items-center">
-        <p className="font-label-sm text-on-surface-variant/40">© 2024 SentinelMind AI. All rights reserved.</p>
+        <p className="font-label-sm text-on-surface-variant/40">Â© 2024 SentinelMind AI. All rights reserved.</p>
         <div className="flex gap-4">
           <span className="material-symbols-outlined text-on-surface-variant/40 hover:text-primary cursor-pointer">public</span>
           <span className="material-symbols-outlined text-on-surface-variant/40 hover:text-primary cursor-pointer">chat_bubble</span>
