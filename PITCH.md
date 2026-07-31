@@ -166,7 +166,7 @@ loop_call_3   ANOMALY   conf 0.95
 > Relabelling until the model agrees is how an evaluation stops meaning
 > anything.
 >
-> **151 tests, 84% backend coverage**, and every experiment writes a timestamped
+> **158 tests, 84% backend coverage**, and every experiment writes a timestamped
 > JSON and CSV artifact, so any number I've said is re-plottable without
 > re-running it."
 
@@ -301,7 +301,7 @@ Keep the demo and the loop explanation **at full length.** Those are what win.
 
 ### "How do you know it actually works?"
 
-> "Two different things, and we keep them separate. 151 tests prove the plumbing
+> "Two different things, and we keep them separate. 158 tests prove the plumbing
 > with a fake model — they run offline in under a second with no API key. The
 > evaluation proves the *judgement* with the real model, against nine labelled
 > cases with written rationales. Tests catch broken code; evals catch bad
