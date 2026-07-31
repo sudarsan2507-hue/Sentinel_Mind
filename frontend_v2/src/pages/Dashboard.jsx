@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+﻿import { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 
-/* ─── vis-network loaded from CDN (same approach as original frontend/index.html) ─── */
+/* â”€â”€â”€ vis-network loaded from CDN (same approach as original frontend/index.html) â”€â”€â”€ */
 function loadVisNetwork() {
   return new Promise((resolve) => {
     if (window.vis) return resolve(window.vis);
@@ -13,7 +13,7 @@ function loadVisNetwork() {
   });
 }
 
-/* ─── Colour map matching vis-network PENDING/OK/WARN/ANOMALY ─── */
+/* â”€â”€â”€ Colour map matching vis-network PENDING/OK/WARN/ANOMALY â”€â”€â”€ */
 const VERDICT_COLORS = {
   OK:      { border: '#00ff66', background: '#0a2115' },
   WARN:    { border: '#fbbf24', background: '#2a1f08' },
@@ -21,7 +21,7 @@ const VERDICT_COLORS = {
   PENDING: { border: '#3b4b3a', background: '#1b1c1c' },
 };
 
-/* ─── Status pill ─── */
+/* â”€â”€â”€ Status pill â”€â”€â”€ */
 const statusStyles = {
   OK:      'bg-primary-container/15 text-primary-container border border-primary-container/20',
   WARN:    'bg-amber-500/10 text-amber-400 border border-amber-500/20',
@@ -37,7 +37,7 @@ function StatusPill({ status }) {
   );
 }
 
-/* ─── Stat card ─── */
+/* â”€â”€â”€ Stat card â”€â”€â”€ */
 function StatCard({ label, value, tone }) {
   const toneClass = {
     ok: 'text-primary-container',
@@ -54,7 +54,7 @@ function StatCard({ label, value, tone }) {
   );
 }
 
-/* ─── Trace Graph ─── */
+/* â”€â”€â”€ Trace Graph â”€â”€â”€ */
 function TraceGraph({ nodes, edges }) {
   const hostRef = useRef(null);
   const netRef = useRef(null);
@@ -103,7 +103,7 @@ function TraceGraph({ nodes, edges }) {
   return <div ref={hostRef} className="w-full h-full" />;
 }
 
-/* ─── Main Dashboard Page ─── */
+/* â”€â”€â”€ Main Dashboard Page â”€â”€â”€ */
 
 export default function Dashboard() {
   const { connected, on } = useSocket();
@@ -118,7 +118,7 @@ export default function Dashboard() {
   const addPending = useCallback((event) => {
     setNodes((prev) => {
       if (prev.some((n) => n.id === event.id)) return prev;
-      return [...prev, { id: event.id, label: event.tool, status: 'PENDING', title: 'awaiting verdict…' }];
+      return [...prev, { id: event.id, label: event.tool, status: 'PENDING', title: 'awaiting verdictâ€¦' }];
     });
     setEdges((prev) => {
       const from = lastNodeId.current;
@@ -182,12 +182,12 @@ export default function Dashboard() {
   const latencies = entries.map((e) => e.verdict.latency_ms).filter(Number.isFinite);
   const mttd = latencies.length
     ? (latencies.reduce((a, b) => a + b, 0) / latencies.length / 1000).toFixed(2) + 's'
-    : '—';
+    : 'â€”';
   const latestAnomaly = entries.find((e) => e.status === 'ANOMALY');
 
   return (
     <div className="min-h-screen bg-[#050505] text-on-background font-body-md">
-      {/* ── Top bar ── */}
+      {/* â”€â”€ Top bar â”€â”€ */}
       <header className="sticky top-0 z-50 flex items-center justify-between px-margin-mobile md:px-margin-desktop py-4 bg-surface-container-lowest border-b border-outline-variant/20 backdrop-blur-md">
         <div className="flex items-center gap-6">
           <Link to="/" className="font-headline-lg text-[20px] font-extrabold text-on-background tracking-tighter hover:text-primary transition-colors">
@@ -230,14 +230,14 @@ export default function Dashboard() {
             to="/"
             className="px-4 py-1.5 border border-outline-variant/30 rounded-lg font-label-sm text-[11px] text-on-surface-variant hover:text-primary hover:border-primary-container/30 transition-colors"
           >
-            ← Home
+            â† Home
           </Link>
         </div>
       </header>
 
       <main className="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-8 flex flex-col gap-6">
 
-        {/* ── Goal display ── */}
+        {/* â”€â”€ Goal display â”€â”€ */}
         <div className={`rounded-xl border px-5 py-3 font-body-md text-[14px] flex items-center gap-3 ${
           goal
             ? 'bg-surface-container-low border-outline-variant/20'
@@ -245,21 +245,21 @@ export default function Dashboard() {
         }`}>
           <span className="font-label-sm text-[10px] uppercase tracking-widest text-on-surface-variant/50 shrink-0">Monitored goal</span>
           <span className={goal ? 'text-on-surface-variant' : 'text-amber-400 italic'}>
-            {goal || 'Not declared — goal drift cannot be assessed for this run.'}
+            {goal || 'Not declared â€” goal drift cannot be assessed for this run.'}
           </span>
         </div>
 
-        {/* ── Anomaly banner ── */}
+        {/* â”€â”€ Anomaly banner â”€â”€ */}
         {latestAnomaly && (
           <div className="rounded-xl border border-error/30 bg-error/5 border-l-4 border-l-error px-5 py-4">
             <div className="font-label-sm text-[11px] uppercase tracking-widest text-error font-bold mb-1.5">
-              Anomaly detected — {latestAnomaly.event.tool}
+              Anomaly detected â€” {latestAnomaly.event.tool}
             </div>
             <div className="font-body-md text-[14px] text-on-surface-variant">{latestAnomaly.verdict.explanation}</div>
           </div>
         )}
 
-        {/* ── Stat cards ── */}
+        {/* â”€â”€ Stat cards â”€â”€ */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
           <StatCard label="Steps observed" value={entries.length} tone="neutral" />
           <StatCard label="OK" value={counts.OK} tone="ok" />
@@ -268,7 +268,7 @@ export default function Dashboard() {
           <StatCard label="Mean time to detect" value={mttd} tone="neutral" />
         </div>
 
-        {/* ── Main grid: trace graph + verdict feed ── */}
+        {/* â”€â”€ Main grid: trace graph + verdict feed â”€â”€ */}
         <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-6">
           {/* Trace graph */}
           <div className="bg-surface-container-low border border-outline-variant/20 rounded-2xl overflow-hidden flex flex-col">
@@ -316,7 +316,7 @@ export default function Dashboard() {
                       <StatusPill status={e.status} />
                       <span className="font-label-sm text-[12px] text-primary-container">{e.event.tool}</span>
                       <span className="ml-auto font-label-sm text-[11px] text-on-surface-variant/40 tabular-nums">
-                        {e.event.duration_ms}ms · {(e.verdict.latency_ms / 1000).toFixed(2)}s
+                        {e.event.duration_ms}ms Â· {(e.verdict.latency_ms / 1000).toFixed(2)}s
                       </span>
                     </div>
                     <p className={`font-body-md text-[13px] leading-snug ${e.verdict.degraded ? 'text-on-surface-variant/50 italic' : 'text-on-surface-variant'}`}>
@@ -329,7 +329,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* ── Knowledge Graph CTA ── */}
+        {/* â”€â”€ Knowledge Graph CTA â”€â”€ */}
         <Link
           to="/graph"
           className="flex items-center justify-between p-5 bg-surface-container-low border border-primary-container/20 rounded-2xl hover:border-primary-container/40 hover:bg-primary-container/5 transition-all group"
@@ -337,7 +337,7 @@ export default function Dashboard() {
           <div className="flex flex-col gap-1">
             <span className="font-headline-lg text-[15px] text-on-background">Knowledge Graph</span>
             <span className="font-body-md text-[13px] text-on-surface-variant">
-              Explore accumulated failure memory — nodes, causal edges, and distilled lessons from past runs.
+              Explore accumulated failure memory â€” nodes, causal edges, and distilled lessons from past runs.
             </span>
           </div>
           <span className="material-symbols-outlined text-primary-container group-hover:translate-x-1 transition-transform text-[24px] shrink-0 ml-4">arrow_forward</span>
@@ -347,7 +347,7 @@ export default function Dashboard() {
 
       <footer className="border-t border-outline-variant/10 py-6 px-margin-mobile md:px-margin-desktop mt-4">
         <p className="font-label-sm text-[11px] text-on-surface-variant/30 text-center">
-          Meta-agent: Claude Sonnet 5 · Codecrash · FRONTIER 2026 · VIT Chennai
+          Meta-agent: Claude Sonnet 5 Â· Codecrash Â· FRONTIER 2026 Â· VIT Chennai
         </p>
       </footer>
     </div>

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+﻿import { useEffect } from 'react';
 import TopNavBar from '../components/TopNavBar';
 import HeroSection from '../components/HeroSection';
 import FeaturesSection from '../components/FeaturesSection';
