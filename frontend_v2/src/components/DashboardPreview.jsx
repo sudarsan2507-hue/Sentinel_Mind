@@ -1,5 +1,4 @@
-import React from 'react';
-
+﻿
 const DashboardPreview = () => {
   return (
     <section className="py-24 bg-[#050505]">
