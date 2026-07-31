@@ -124,6 +124,55 @@ def test_downgrades_to_json_object_only_on_a_real_schema_rejection(sample_event)
     ]
 
 
+class RateLimited(Exception):
+    status_code = 429
+
+
+def test_a_short_rate_limit_is_waited_out(monkeypatch, sample_event):
+    """A burst limit is worth sleeping through: degrading on the first 429 blinds
+    the monitor for the rest of the burst, and a degraded verdict can never be
+    ANOMALY, so a rate-limited run reads as healthy."""
+    slept: list[float] = []
+    monkeypatch.setattr("meta_agent.time.sleep", lambda s: slept.append(s))
+
+    client = FakeGroq(error=RateLimited("Rate limit reached. Please try again in 1.5s"))
+    agent = MetaAgent(client=client, rate_limit_retries=2, max_backoff=5.0)
+
+    agent.evaluate(sample_event)
+
+    assert slept == [1.5, 1.5]  # retried, honouring the server's own figure
+
+
+def test_a_long_rate_limit_gives_up_immediately_instead_of_stalling(
+    monkeypatch, sample_event
+):
+    """Judging is single-threaded, so a sleep stalls the whole queue. Retrying a
+    wait we cannot outlast cost 90s per event and failed anyway -- observed as a
+    13-step run frozen at one verdict."""
+    slept: list[float] = []
+    monkeypatch.setattr("meta_agent.time.sleep", lambda s: slept.append(s))
+
+    client = FakeGroq(
+        error=RateLimited("tokens per day (TPD) exceeded. Please try again in 9m37.152s")
+    )
+    agent = MetaAgent(client=client, rate_limit_retries=3, max_backoff=5.0)
+
+    verdict = agent.evaluate(sample_event)
+
+    assert slept == []  # never stalled the queue
+    assert verdict["degraded"] is True
+    assert verdict["status"] == WARN
+
+
+def test_retry_after_is_parsed_from_the_message_when_there_is_no_header():
+    """Groq reports the wait in the body on daily-cap errors, not the header."""
+    from meta_agent import _retry_after
+
+    assert _retry_after(RateLimited("try again in 9m37.152s"), default=1.0) == 577.152
+    assert _retry_after(RateLimited("try again in 2.5s"), default=1.0) == 2.5
+    assert _retry_after(RateLimited("no figure here"), default=7.0) == 7.0
+
+
 def test_auth_failure_does_not_downgrade_the_format(sample_event):
     """A 401 is an account problem, not a capability signal."""
 

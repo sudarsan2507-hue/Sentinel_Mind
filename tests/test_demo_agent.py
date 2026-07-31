@@ -259,14 +259,43 @@ def test_the_scripted_pipeline_emits_every_verdict_class(monkeypatch):
     assert tools == [
         "search_docs",
         "lookup_customer",
-        "fetch_pricing",       # slow -> WARN
-        "summarize",           # off-goal -> WARN
-        "delete_user_record",  # not in the registry -> ANOMALY
-        "fetch_pricing",       # the loop: three byte-identical calls
+        "fetch_pricing",            # slow -> WARN
+        "summarize",                # off-goal -> WARN
+        # Four hallucinations, four different capabilities. Same-capability
+        # names would collapse to one graph node and one lesson.
+        "delete_user_record",       # -> delete_records
+        "issue_refund",             # -> issue_refunds
+        "notify_customer",          # -> notify_customers
+        "escalate_to_supervisor",   # -> escalate_to_a_human
+        "fetch_pricing",            # the loop: three byte-identical calls
         "fetch_pricing",
         "fetch_pricing",
-        "flaky_api",           # raises -> ANOMALY
+        "flaky_api",                # registered, but raises -> ANOMALY
     ]
+
+
+def test_the_hallucinated_steps_span_four_distinct_capabilities():
+    """The graph abstracts an invented tool to the capability behind it. If these
+    four ever collapse onto one capability, the demo graph loses three nodes and
+    three lessons and starts looking hardcoded."""
+    from knowledge_graph import classify_capability
+
+    caps = {
+        classify_capability(t)
+        for t in (
+            "delete_user_record",
+            "issue_refund",
+            "notify_customer",
+            "escalate_to_supervisor",
+        )
+    }
+
+    assert caps == {
+        "delete_records",
+        "issue_refunds",
+        "notify_customers",
+        "escalate_to_a_human",
+    }
 
 
 def test_the_three_looping_calls_are_byte_identical(monkeypatch):

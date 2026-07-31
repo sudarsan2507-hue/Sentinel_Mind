@@ -30,7 +30,7 @@ from meta_agent import MetaAgent
 from session_context import SessionContext
 
 ROOT = Path(__file__).resolve().parent.parent
-FRONTEND_DIR = ROOT / 'frontend'
+FRONTEND_DIR = ROOT / 'frontend_v2' / 'dist'
 
 # Load GROQ_API_KEY from the repo-root .env before MetaAgent builds its client.
 load_dotenv(ROOT / ".env")
@@ -51,6 +51,12 @@ KNOWN_TOOLS = [
     # scripted demo pipeline
     "fetch_pricing",
     "summarize",
+    # Registered on purpose. flaky_api is a legitimate-but-unreliable upstream,
+    # which is what it would be in a real pipeline. Leaving it unregistered made
+    # its verdict read as a hallucinated tool, so step 7 of the demo duplicated
+    # step 5 instead of demonstrating a swallowed exception -- three planted
+    # failure modes collapsing into two.
+    "flaky_api",
     # real agent
     "get_order",
     "agent_llm_call",
@@ -278,6 +284,28 @@ def create_app(
 
     @app.get("/")
     def dashboard():
+        return send_from_directory(FRONTEND_DIR, "index.html")
+
+    @app.get("/<path:path>")
+    def spa_catchall(path):
+        """Serve the React SPA for any unknown path (enables client-side routing).
+
+        Explicit API prefixes are excluded so Flask routes registered above always
+        win. Anything else either resolves to a real static file (JS/CSS/images)
+        in the dist folder, or falls through to index.html for React Router.
+        """
+        # Never intercept known API prefixes -- let Flask's earlier routes handle them.
+        _api_prefixes = (
+            "trace", "audit", "session", "knowledge", "health",
+            "socket.io", "static",
+        )
+        if any(path == p or path.startswith(p + "/") for p in _api_prefixes):
+            from flask import abort
+            abort(404)
+
+        target = FRONTEND_DIR / path
+        if target.exists():
+            return send_from_directory(FRONTEND_DIR, path)
         return send_from_directory(FRONTEND_DIR, "index.html")
 
     return app, socketio

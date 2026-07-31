@@ -10,6 +10,12 @@ __pycache__/
 venv/
 .pytest_cache/
 
+# Coverage data -- machine-local, regenerated on every run
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
 # Recorded traces may contain real pipeline inputs/outputs
 traces/
 
