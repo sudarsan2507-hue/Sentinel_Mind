@@ -1,5 +1,4 @@
-import React from 'react';
-import { ShieldCheck, ArrowRight } from 'lucide-react';
+﻿import { ShieldCheck, ArrowRight } from 'lucide-react';
 
 export default function Navbar() {
   return (
