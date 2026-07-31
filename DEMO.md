@@ -256,6 +256,80 @@ Click **Knowledge Graph**.
 
 ---
 
+## The 2-minute verbal explainer
+
+For when you are explaining the project without a screen — a judge at the table,
+a corridor conversation, the opening of a pitch. ~330 words at a natural pace.
+
+### [0:00–0:20] The problem
+
+> "Every team shipping AI agents right now has the same blind spot. When an agent
+> loops forever, invents a tool it doesn't have, or quietly drifts off the task —
+> none of that throws an error. Nothing crashes.
+>
+> You find out later, reading logs. LangSmith and the rest record what happened.
+> Nothing watches while it's happening."
+
+### [0:20–0:45] What it is
+
+> "SentinelMind is an AI agent that monitors other AI agents.
+>
+> You wrap any function in one decorator — that's the entire integration. Every
+> tool call and model call now emits a trace event. A second model reads each step
+> and returns a verdict: OK, warning, or anomaly, with a plain-English reason a
+> developer can act on. In under a second."
+
+### [0:45–1:25] The hard part — **slow down here**
+
+> "The interesting problem is that two of the three failures we catch are
+> *invisible one step at a time*.
+>
+> Take a loop. The third identical call looks exactly like the first. On its own
+> it's a perfectly healthy call — doing something once is normal. Anything judging
+> one step at a time sees three healthy calls and says 'fine' three times.
+>
+> So we give the judge the *run*, not just the step: the declared goal, a window
+> of recent steps, and a repeat count. And that count isn't guessed by the model —
+> we hash the call and count it in plain code, then hand the model that number as
+> a fact.
+>
+> Counting isn't a language problem. The model's job is the part that actually
+> needs semantics."
+
+### [1:25–1:45] Proof
+
+> "It's measured, not asserted. Eight of nine on our labelled eval set. p50 0.62
+> seconds, p95 1.43. A hundred and fifty-eight tests that run offline with no API
+> key.
+>
+> And when the provider fails, every verdict degrades to a *warning* — never to
+> OK. We never claim health we didn't verify."
+
+### [1:45–2:00] Memory, and the honest limit
+
+> "Everything it catches becomes memory — abstracted to capabilities, because the
+> agent invents a different endpoint name every single run. Those become lessons
+> fed back into the agent's own prompt.
+>
+> We can show that loop closes. Whether it actually lowers the failure rate is our
+> next measurement — not a claim we're making today."
+
+### Delivery notes
+
+**The 40 seconds from 0:45 is the whole pitch.** Everything else is setup. If you
+are cut short, drop the proof section, never the loop explanation — it is the only
+part that shows you understood a hard problem rather than wiring an API to a
+dashboard.
+
+**Land the last line deliberately.** Volunteering the unmeasured claim is what
+makes the eight-of-nine and the p95 believable. A judge who hears you disclaim one
+number trusts the others more.
+
+Two phrases worth keeping verbatim: *"Counting isn't a language problem"* and
+*"We never claim health we didn't verify."*
+
+---
+
 ## What to say, precisely
 
 Wording that survives a judge checking it:
