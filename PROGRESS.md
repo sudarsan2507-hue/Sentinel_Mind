@@ -557,3 +557,12 @@ draws once session + verdicts are in, instead of drawing empty and reflowing).
 SentinelMind is a standalone project now, not a hackathon entry. Removed `PITCH.md`,
 `docs/Presentation pitch.md`, `DEMO.md` (the recording runbook and spoken script) and the
 FRONTIER slide deck. Running and demoing it is covered by the README.
+
+### 2026-10-12 — README rewritten for the standalone project
+
+New README: what it catches and how it knows, one-decorator integration, screenshots
+(`docs/screenshots/`: dashboard, failure memory, landing, phone), quick start, how it works,
+failure memory, measured results with their caveats, API, configuration, design decisions,
+limitations. Removed stale facts (32 tests, the old single-file dashboard as the main UI, a
+disabled auto-correct button, vis-network credit) and presentation phrasing. Credits: built by
+Sudarsan; the first prototype was built with Jaaiwanth K and Adharshan N.

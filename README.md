@@ -1,21 +1,35 @@
 # SentinelMind
 
-**An AI agent that monitors other AI agents — in real time, with reasons.**
+**Catch your AI agent's mistakes while it is still running.**
 
-LLM agents fail silently. They hallucinate a tool that doesn't exist, loop on the same call
-forever, or quietly drift away from what they were asked to do. Existing tooling logs all of it
-faithfully — and tells you afterwards.
+AI agents rarely crash. They fail quietly: they invent a tool that doesn't exist, call the same
+thing over and over, or drift away from what they were asked to do, and the logs look fine.
+SentinelMind is a second AI that watches every step an agent takes, judges it live, and says in
+plain English what went wrong, while there is still time to act. Every failure it finds is
+remembered, and the lessons are fed back to the agent on its next run.
 
-SentinelMind watches the run as it happens, judges every step with a second LLM, and explains
-what went wrong in plain English while there is still time to act.
-
-> **LangSmith logs. SentinelMind watches.**
+![The live dashboard: a 12-step run with its timeline, verdict mix, latency and the verdict feed](docs/screenshots/dashboard.png)
 
 ---
 
-## What it actually does
+## What it catches
 
-Wrap any function in an LLM pipeline with one decorator:
+| Failure | What it looks like | How SentinelMind knows |
+|---|---|---|
+| **Invented tool** | The agent calls `delete_user_record` or `/v1/refunds/create`, neither of which exists | Checked against the tool registry: a fact, not an opinion |
+| **Loop** | `fetch_pricing` three times with the same input, or `search_docs` six times with a reworded query | Exact repeats are counted by hashing each call; reworded ones by counting calls per tool. The judge is handed both numbers |
+| **Goal drift** | Asked about a refund window, it starts summarising hardware upsells | The judge compares each step with the goal declared for the session |
+| **Swallowed error** | A call raises, and the agent carries on as if it had worked | Exceptions are captured by the decorator and always flagged |
+
+Every step gets one of three verdicts, with a one-or-two-sentence reason and a confidence score:
+
+| Verdict | Means |
+|---|---|
+| 🟢 `OK` | Valid call, sensible output, normal latency |
+| 🟡 `WARN` | It worked, but something is off: slow, oddly shaped, loosely on topic |
+| 🔴 `ANOMALY` | Broken or dangerous: an invented tool, an exception, a loop, clear drift |
+
+## Integration is one decorator
 
 ```python
 from decorator import monitor
@@ -25,349 +39,280 @@ def search_docs(query: str) -> str:
     return vector_store.similarity_search(query)
 ```
 
-That's the entire integration. Every call now emits a structured trace event, gets judged by a
-meta-agent, and appears on a live dashboard colour-coded by verdict.
-
-| Verdict | Means | Example |
-|---|---|---|
-| 🟢 `OK` | Valid call, output consistent with input, normal latency | A doc lookup that answers the question |
-| 🟡 `WARN` | Completed, but something is off | 2.4s on a call that normally takes 60ms |
-| 🔴 `ANOMALY` | Broken or dangerous | A tool that isn't in the registry |
-
-Every verdict carries a plain-English explanation and a confidence score.
+The function returns exactly what it did before and raises exactly what it did before. It also
+sends a trace event (input, output, error, duration) that is judged on a worker thread, so
+watching the agent never slows it down.
 
 ---
 
-## Measured results
+## Screenshots
 
-| Metric | Result |
-|---|---|
-| Verdict latency | **p50 0.76–1.00s · p95 1.53–2.04s** (p95 = slowest of 9) |
-| Accuracy on the labelled eval set | **9 / 9** on each of three runs |
-| Test suite | **174 passing**, offline, no API key required |
+**Failure memory.** Everything the agent has got wrong across runs, drawn as a graph: the agent
+at the centre, its failure modes around it, the tools that caused them (violet = invented), and
+the capabilities it kept reaching for but does not have. Drag nodes around; click one for a short
+explanation and the lesson the agent is given next run.
 
-Measured 2026-10-11 against `openai/gpt-oss-120b` at `reasoning_effort="medium"` (Groq retired the
-Llama models). Earlier, on `llama-3.3-70b-versatile` (2026-07-30): 8/9, p95 1.43s. Full artifacts
-in [`evals/results/`](evals/results/) — re-plottable without re-running.
+![Failure memory: failure tiles above a ring graph of failures, tools and missing capabilities](docs/screenshots/failure-memory.png)
 
-Reasoning effort was chosen by measurement, not taste: `low` was fastest (~0.8s) but scored 7/9
-(two WARN cases over-called as ANOMALY); the provider default was slowest and twice ran out of
-tokens mid-thought, returning no verdict at all. Three runs is still a small sample.
-
-> The one miss was `output_drifts_from_goal`: expected `WARN`, returned `ANOMALY` for a summary
-> that wandered off the session goal. That is a severity disagreement on a genuinely borderline
-> case, not a missed detection — and it is the *safe* direction to err. Accuracy has ranged 8–9/9
-> across runs at `temperature=0`, because LLM inference is not deterministic even when sampling is.
-> Quote it as **"9 of 9 on our labelled set"** (or 8 of 9 for the Llama-era run), never as a
-> percentage — nine cases is a demonstration, not a statistic.
-
-Reproduce both yourself:
-
-```bash
-pytest tests/ -v          # 32 tests, fully offline
-python evals/run_eval.py  # scores the meta-agent against 9 labelled cases
-```
-
-> Latency and accuracy are measured, not estimated. `run_eval.py` prints a confusion matrix and
-> p50/p95 latency on every run, and **refuses to report accuracy if any case failed to reach the
-> model** — a number computed over failed API calls is worse than no number.
->
-> `temperature=0` is not determinism: LLM inference varies run to run. Nine cases is enough to
-> demonstrate, thin to generalise from. Report it as "8–9 of 9 on our labelled set", never as
-> "100% accurate".
-
----
-
-## How it works
-
-```
-Monitored Agent  ──── declares its GOAL up front
-      │  every tool call · model invocation · memory read
-      ▼
-Trace Decorator ......................... backend/decorator.py
-      │  {tool, input, output, duration_ms, error}
-      ▼
-Flask + WebSocket ....................... backend/app.py
-      │  returns 202 immediately — observing must not slow the agent
-      ├──► Session Context ............... backend/session_context.py
-      │      goal + rolling window + DETERMINISTIC repeat detection
-      ▼
-Meta-Agent (Groq) ....................... backend/meta_agent.py
-      │  judges the step in the context of the run so far
-      ▼
-Verdict {status, explanation, confidence}
-      │
-      ├──► React Dashboard ............... frontend/index.html
-      └──► Structured Audit Log .......... backend/audit_log.py
-```
-
-### The part that matters
-
-A verdict on a single isolated step **cannot detect two of the three failure modes we claim to
-catch**:
-
-- **Infinite loops exist only across steps.** One `fetch_pricing` call is healthy. The same call
-  three times is the bug — and the third call is byte-identical to the first. There is no signal
-  in the step itself.
-- **Goal drift needs a goal.** Without knowing what the agent was asked to do, "drifted off-task"
-  is not a judgement anyone can make — and a model asked to make it will invent one.
-
-So the meta-agent receives, alongside every step: the declared session goal, a bounded window of
-recent steps, and a **deterministic repeat count** — we fingerprint each call as
-`sha256(tool + input)` with sorted keys and count exact recurrences ourselves.
-
-**Deterministic where deterministic is possible; LLM judgement only where judgement is required.**
-Counting is not a language problem. Asking a model to notice three JSON blobs are identical is
-slower, costlier, and non-reproducible versus computing it. The model's job is the part that
-genuinely needs semantics.
-
-The payoff, from a real eval run over three byte-identical calls:
-
-```
-loop_call_1   OK        conf 1.00
-loop_call_2   WARN      conf 0.70    ← confidence dips exactly where it should
-loop_call_3   ANOMALY   conf 0.90
-```
-
-A per-step classifier returns the same verdict three times.
+<table>
+<tr>
+<td width="62%"><img src="docs/screenshots/landing.png" alt="Landing page replaying five real verdicts"></td>
+<td width="38%"><img src="docs/screenshots/dashboard-mobile.png" alt="Dashboard on a phone"></td>
+</tr>
+<tr>
+<td>The landing page replays five verdicts from a real run</td>
+<td>The dashboard on a phone</td>
+</tr>
+</table>
 
 ---
 
 ## Quick start
 
-**Requires** Python 3.11+, Node 18+, and a free [Groq](https://console.groq.com) API key.
+**Needs** Python 3.11+, Node 18+ and a free [Groq](https://console.groq.com) API key.
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/sudarsan2507-hue/Sentinel_Mind.git
 cd Sentinel_Mind
 
-# A project venv. Use one: the deps are not guaranteed present on any
-# system Python, and a missing Flask surfaces as an import error mid-demo.
-py -3 -m venv .venv
-.venv/Scripts/python.exe -m pip install -r requirements.txt   # Windows
-# source .venv/bin/activate && pip install -r requirements.txt  # macOS/Linux
+python -m venv .venv
+.venv/Scripts/python -m pip install -r requirements.txt     # Windows
+# source .venv/bin/activate && pip install -r requirements.txt   # macOS / Linux
 
-cp .env.example .env          # Windows: copy .env.example .env
-# paste your GROQ_API_KEY into .env — it is gitignored, never commit it
+cp .env.example .env        # then put your GROQ_API_KEY in .env (it is gitignored)
 ```
 
-**Build the dashboard.** The server serves `frontend_v2/dist`, which is a build
-artifact and deliberately not in git. Skip this and `/` returns 404 — there is no
-pre-built copy to fall back on:
+Build the web app once (the server serves `frontend_v2/dist`, which is not in git):
 
 ```bash
-cd frontend_v2
-npm install
-npm run build
-cd ..
+cd frontend_v2 && npm install && npm run build && cd ..
 ```
 
-Run the server:
+Start the server and open **http://127.0.0.1:5000**:
 
 ```bash
 cd backend
 python app.py
 ```
 
-Open **http://127.0.0.1:5000**, then in a second terminal:
+Then, in a second terminal, give it something to watch:
 
 ```bash
 cd backend
-python demo_agent.py
+python demo_agent.py            # a scripted 12-step run that hits every failure type
+python real_agent.py            # a real LLM agent with a task it cannot finish
+python real_agent.py --learn    # the same agent, given the lessons from earlier runs
+python demo_agent.py --offline  # replay a recorded run: no API calls at all
 ```
 
-Watch the dashboard populate: nodes appear grey, then turn green, amber, or red as verdicts land.
+`demo_agent.py --record` saves a run (events and verdicts) to `traces/`, so `--offline` can replay
+it later without a network or an API key.
 
-**Record the offline fallback while you still have a network:**
+### The real agent
+
+`real_agent.py` runs its own small model (`openai/gpt-oss-20b`), gives it a customer-support task
+it cannot complete with the read-only tools it has, and lets it decide what to do. Nothing is
+scripted: the invented endpoints, the loops and the drift are whatever the model actually does.
+On a typical run it invents three or four refund and escalation endpoints and circles
+`search_docs` before hitting the step limit.
+
+---
+
+## How it works
+
+```
+ Your agent ─── declares its goal ───────────────────────────────┐
+     │  every tool call, model call, memory read                  │
+     ▼                                                            ▼
+ @monitor decorator ─────────────► Flask server ─────────► Session context
+ backend/decorator.py               backend/app.py           backend/session_context.py
+ {tool, input, output,              POST /trace → 202         goal + last 8 steps
+  error, duration}                  judged on a worker        + repeat count (sha256)
+                                         │                    + calls per tool
+                                         ▼
+                                   Meta-agent (Groq) ◄────── context
+                                   backend/meta_agent.py
+                                         │  {status, explanation, confidence}
+                       ┌─────────────────┼──────────────────┐
+                       ▼                 ▼                  ▼
+                 Live dashboard     Audit log          Knowledge graph
+                 (WebSocket)        backend/audit_log  backend/knowledge_graph.py
+                 frontend_v2/                          → lessons for the next run
+```
+
+### Computed facts, judged meaning
+
+A judge that looks at one step at a time cannot see two of the four failures above:
+
+- **A loop only exists across steps.** One `fetch_pricing` call is healthy. Three identical ones
+  are the bug, and nothing in the third call says so.
+- **Drift needs a goal.** Without knowing what the agent was asked to do, "off-task" is a guess.
+
+So the meta-agent gets, alongside each step: the declared goal, a window of recent steps, and two
+numbers computed in plain Python rather than inferred: how many times this exact call has
+happened (a sha256 fingerprint of tool and input, keys sorted), and how many times this tool has
+been called with how many distinct inputs. Counting is not a language problem; the model's job is
+the part that needs judgement.
+
+From the latest labelled evaluation: the same call three times against a clean session. The
+only thing that changes between them is the repeat count the judge is given.
+
+```
+loop_call_1   OK        conf 0.98
+loop_call_2   WARN      conf 0.92    ← a second identical call may still be a retry
+loop_call_3   ANOMALY   conf 0.98
+```
+
+### Failure memory
+
+Every `WARN` and `ANOMALY` is stored as a small graph that persists across runs:
+
+```
+(tool)       ──exhibits──►   (failure mode)
+(tool)       ──requires──►   (capability)      only for invented tools
+(capability) ──missing_in──► (goal)
+```
+
+It keys on **capabilities, not endpoint names**. The agent invents a different path almost every
+run (`/v1/orders/refund`, `/v1/refunds/create`, `/v1/orders/ord_5512/refund`), but what it is
+reaching for, a way to issue refunds, stays the same. So the lesson transfers:
+
+> You have NO tool that can issue refunds. Across 6 previous attempts an endpoint for it was
+> invented and failed. Do not try again — state plainly in your final answer that this action
+> requires a human.
+
+`real_agent.py --learn` adds these lessons to the agent's system prompt. This is retrieval, not
+training: no weights change. Whether it reduces failures over many runs has not been measured yet;
+`evals/run_learning_experiment.py` is built for that and refuses to report a result if any step
+went unjudged.
+
+---
+
+## Measured results
+
+| | |
+|---|---|
+| Labelled evaluation | **9 of 9** cases judged correctly, on each of three runs |
+| Verdict latency on that set | median 0.76–1.00 s, slowest 1.53–2.04 s |
+| Tests | **174 passing**, offline, no API key needed |
+| Web app (Lighthouse, mobile / desktop) | performance 90–92 / 97–99 · accessibility 100 |
+
+Measured on 2026-10-11 with `openai/gpt-oss-120b` at `reasoning_effort="medium"`. The setting was
+chosen by measurement: `low` was fastest but scored 7/9 (two warnings called anomalies), and the
+provider default sometimes ran out of tokens mid-reasoning and returned nothing. Nine cases show
+the mechanism works; they are not a statistic. On live runs, Groq's free-tier token limit queues
+verdicts, so mid-run they take 10–20 s each.
+
+Reproduce:
 
 ```bash
-python demo_agent.py --record    # saves events AND verdicts to traces/
-python demo_agent.py --offline   # replays those verdicts, no provider call at all
+cd backend && python -m pytest ../tests -q      # offline
+python evals/run_eval.py                        # needs GROQ_API_KEY
 ```
 
-`--offline` refuses to run against a recording that has no verdicts in it, rather than replaying
-half a run and looking like it worked.
-
-### Watching a real agent, and learning from it
-
-`demo_agent.py` is scripted — reliable for a stage demo, but its failures are written in advance.
-`real_agent.py` is not: it runs its own model (`openai/gpt-oss-20b`, the smaller one, on purpose), gets a task
-it cannot complete with the read-only tools it has, and decides for itself what to do. The loops,
-the drift, and the invented endpoints are whatever the model actually does.
-
-```bash
-python real_agent.py             # a real agent, monitored live
-python real_agent.py --learn     # same, with lessons from past failures injected
-```
-
-Every non-OK verdict is ingested into `knowledge_graph.py` as
-`(tool) exhibits (failure_mode)`, `(tool) requires (capability)`,
-`(capability) missing_in (goal)`, persisted across runs and distilled into ranked lessons. It keys
-on **capabilities, not endpoint strings** — the agent invents a different path almost every run
-(`/v1/orders/refund`, `/v1/refunds/create`), but the capability it reaches for is stable, so
-"you have no way to issue refunds" transfers where a literal path would not.
-
-> **This is not training.** No weights change. It is retrieval-augmented prompting over an
-> accumulated failure store. The loop is genuine; the description has to stay honest.
->
-> ⚠️ **Whether the memory actually reduces failures is unmeasured.** The graph, the lessons, and
-> the injection all work and are verified. The *effect* is not established — the first experiment
-> that claimed a 100% drop was an artifact of rate-limited verdicts, since a degraded verdict is
-> WARN by construction and can never be ANOMALY. `evals/run_learning_experiment.py` now refuses to
-> report a comparison built on unjudged steps. Do not claim the loop works until it prints a number.
-
-Every experiment run writes a timestamped artifact pair to `evals/results/`, so a result never has
-to be re-earned in order to be plotted:
-
-```
-evals/results/learning_2026-07-30_14-42-18.json    full structure, replots without the server
-evals/results/learning_2026-07-30_14-42-18.csv     flat rows for pandas/Excel
-```
-
-Files accumulate rather than overwrite. Each carries an `outcome` (`IMPROVED` / `UNCHANGED` /
-`REGRESSED` / `INVALID`) and a `valid` flag, so a rate-limited run is preserved as evidence and can
-never be mistaken for a clean one. Verdicts also record token usage now, so a run's cost against the
-provider's daily cap is recoverable from the audit log alone.
-
-### The demo scenario
-
-`demo_agent.py` runs a customer-support pipeline that deliberately produces every verdict:
-
-| Step | Tool | Expected |
-|---|---|---|
-| 1 | `search_docs` | 🟢 healthy lookup |
-| 2 | `lookup_customer` | 🟢 healthy lookup |
-| 3 | `fetch_pricing` | 🟡 2.4s — degraded upstream |
-| 4 | `summarize` | 🟡 output drifts off-goal |
-| 5 | `delete_user_record` | 🔴 hallucinated tool, not in the registry |
-| 6 | `fetch_pricing` ×3 | 🔴 identical repeated call — infinite loop |
-| 7 | `flaky_api` | 🔴 raises an exception |
+Every eval run writes a timestamped JSON and CSV to `evals/results/`. `run_eval.py` prints a
+confusion matrix and latency percentiles, and refuses to print an accuracy figure if any case
+failed to reach the model.
 
 ---
 
 ## Project layout
 
 ```
-Sentinel-Mind/
-├── backend/
-│   ├── decorator.py         @monitor — captures agent steps
-│   ├── session_context.py   goal + window + deterministic loop detection
-│   ├── meta_agent.py        trace + context → Groq → verdict
-│   ├── audit_log.py         thread-safe verdict store
-│   ├── knowledge_graph.py   persistent failure memory, distilled into lessons
-│   ├── app.py               Flask + SocketIO server
-│   ├── demo_agent.py        scripted pipeline — reliable stage demo
-│   └── real_agent.py        a genuine tool-calling agent that fails unscripted
-├── frontend/
-│   └── index.html           legacy single-file dashboard (no build step)
-├── evals/
-│   ├── cases.py             9 labelled cases with written rationales
-│   ├── run_eval.py          accuracy, confusion matrix, p50/p95 latency
-│   ├── artifacts.py         writes every run to timestamped JSON + CSV
-│   └── results/             one file pair per run, never overwritten
-└── tests/                   32 tests, fully offline
+backend/
+  decorator.py          @monitor: captures each step
+  session_context.py    goal, recent steps, repeat and frequency counts
+  meta_agent.py         trace + context → Groq → verdict (never raises)
+  audit_log.py          thread-safe verdict store
+  knowledge_graph.py    failure memory and lessons
+  app.py                Flask + Socket.IO server, serves the web app
+  demo_agent.py         scripted run that hits every failure type
+  real_agent.py         a real tool-calling agent that fails unscripted
+frontend_v2/            React 19 + Vite + Tailwind web app
+  src/pages/            LandingPage, Dashboard, KnowledgeGraph
+  src/components/       landing sections; dashboard/ charts (plain SVG)
+evals/                  labelled cases, eval harness, learning experiment, results/
+tests/                  174 tests, fully offline
+docs/screenshots/       images used in this README
 ```
+
+`frontend/index.html` is the original single-file dashboard, kept for reference.
 
 ## API
 
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `POST` | `/trace` | Submit one trace event (returns `202` immediately) |
-| `POST` | `/replay` | Submit a pre-judged `{event, verdict}` pair — no provider call |
-| `GET` | `/knowledge` | Accumulated failure graph: nodes, edges, derived lessons |
-| `GET` | `/knowledge/lessons` | Lessons only, plus a ready-made prompt block |
-| `POST` | `/knowledge/clear` | Wipe accumulated memory — requires `{"confirm": true}` |
-| `POST` | `/session/goal` | Declare what the agent is supposed to accomplish |
-| `GET` | `/session` | Current goal and rolling window |
-| `GET` | `/audit` | Full audit log; `?status=ANOMALY` to filter |
+| `POST` | `/replay` | Submit a recorded `{event, verdict}` pair; no model call |
+| `POST` | `/session/goal` | Declare what the agent is supposed to do |
+| `GET` | `/session` | Current goal and recent steps |
+| `GET` | `/audit` | All verdicts; `?status=ANOMALY` to filter |
 | `GET` | `/audit/export` | Download the log as JSON |
 | `POST` | `/audit/clear` | Reset between runs |
-| `GET` | `/health` | Liveness probe |
+| `GET` | `/knowledge` | The failure graph: nodes, edges, lessons |
+| `GET` | `/knowledge/lessons` | Lessons only, plus a ready-made prompt block |
+| `POST` | `/knowledge/clear` | Wipe the memory; requires `{"confirm": true}` |
+| `GET` | `/health` | Liveness, model in use, structured-output mode |
 
-Verdicts stream to connected dashboards over WebSocket as `verdict` events.
+Verdicts stream to open dashboards over Socket.IO as `verdict` events.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `GROQ_API_KEY` | — | **Required.** Free at console.groq.com |
-| `SENTINEL_MODEL` | `openai/gpt-oss-120b` | Groq's lineup changes — verify against the live list |
-| `SENTINEL_AGENT_MODEL` | `openai/gpt-oss-20b` | The monitored real agent's model |
-| `SENTINEL_REASONING_EFFORT` | `medium` | gpt-oss only: `low`, `medium`, `high`, or `default` (send nothing) |
-| `SENTINEL_CONTEXT_WINDOW` | `8` | Steps retained for loop and drift detection |
-| `SENTINEL_CONFIDENCE_THRESHOLD` | `0.0` | ANOMALY verdicts below this are downgraded to WARN |
-
-The threshold is the mitigation for false-positive alert fatigue: raise it and only high-confidence
-anomalies page you.
+| `SENTINEL_MODEL` | `openai/gpt-oss-120b` | The judge |
+| `SENTINEL_AGENT_MODEL` | `openai/gpt-oss-20b` | The real agent being watched |
+| `SENTINEL_REASONING_EFFORT` | `medium` | gpt-oss only: `low`, `medium`, `high`, or `default` |
+| `SENTINEL_CONTEXT_WINDOW` | `8` | Steps kept for loop and drift detection |
+| `SENTINEL_CONFIDENCE_THRESHOLD` | `0.0` | Anomalies below this confidence are downgraded to warnings |
+| `PORT` | `5000` | Server port |
 
 ---
 
 ## Design decisions
 
-**Failures degrade to WARN, never to OK.** Every error path — network failure, truncated response,
-unparseable JSON — returns a `WARN` carrying the reason, tagged `degraded: true`. Never `OK`
-(don't claim health you didn't verify) and never `ANOMALY` (our outage is not the monitored agent's
-fault). The whole system runs end-to-end without an API key; it simply reports that it couldn't look.
+- **When the judge fails, the verdict says so.** A network error, rate limit or unreadable reply
+  becomes a `WARN` marked `degraded`, never `OK` (it didn't check) and never `ANOMALY` (the outage
+  isn't the agent's fault). Degraded verdicts are never written into the failure memory.
+- **Watching never blocks.** `POST /trace` queues and returns in under a millisecond; judging
+  happens on a worker thread.
+- **Steps are recorded after they are judged,** otherwise every step would count as its own repeat.
+- **JSON is enforced by the API.** Verdicts use a strict JSON schema, with a one-time fallback to
+  JSON mode only when the model rejects the schema itself. `/health` reports which is in force.
+- **The decorator never changes behaviour.** A monitor that alters what it monitors isn't one.
+- **The web app is light.** Pages load on demand, assets are precompressed, the charts and graph
+  are plain SVG, and nothing loads from a CDN except fonts.
 
-**Trace submission is non-blocking.** `POST /trace` queues and returns `202` in under a millisecond.
-Judging takes ~600ms — if the POST blocked, SentinelMind would slow the agent it is watching by
-600ms per step.
+## Limitations
 
-**Steps are recorded after judging, not before.** Otherwise every step appears in its own window and
-counts as its own repeat, and every call looks like a loop.
-
-**JSON is enforced by the API, not by prompting.** Verdicts use structured outputs against a JSON
-schema, with a one-time downgrade to loose JSON mode if the model rejects strict schemas. We never
-ship a regex over model output.
-
-The downgrade fires **only on a 400 that names the format** — not on auth failures, rate limits, or
-dropped connections. It is permanent for the life of the process, so downgrading for the wrong
-reason costs strict enforcement for the whole run with nothing to show for it: loose mode works
-fine, so the weaker guarantee is invisible. `GET /health` reports which mode is actually in force.
-
-> **`openai/gpt-oss-120b` accepts strict `json_schema`** — `/health` reports
-> `"structured_output": "json_schema"` (verified 2026-10-11). The history below is from the
-> Llama era, kept because the fallback still matters for other models.
-> **`llama-3.3-70b-versatile` rejected strict `json_schema`, so it ran in
-> `json_object` mode.** Verified 2026-07-30: `/health` reports `"structured_output":
-> "json_object"` after the first call. The fallback is doing real work rather than sitting
-> unused — every verdict in the numbers above was parsed from loose JSON mode without a single
-> parse failure. Say "JSON mode enforced by the API, with a schema requested first", not "strict
-> schema enforcement". The mechanism is the same; the guarantee is one notch weaker, and the
-> difference is checkable in ten seconds by anyone who asks.
-
-**The decorator never changes behaviour.** Return values and exceptions pass through untouched. A
-monitoring tool that alters what it monitors isn't monitoring.
+- **It detects and explains; it does not intervene.** Stopping a step before it runs is the next
+  step, not something it does today.
+- **The learning effect is unmeasured.** The memory, lessons and injection work; whether they cut
+  failures over many runs has not been shown yet.
+- **Nine labelled cases** are enough to show the mechanism, not to generalise from.
+- **Free-tier rate limits** slow live judging on long runs.
+- **Only plain Python callables have been wrapped so far.** A LangChain tool should wrap the same
+  way, but that path is not written or tested.
 
 ---
 
-## Known limitations
+## Development
 
-Stated plainly, because a demo that hides its edges is worse than one that doesn't.
+```bash
+cd backend && python -m pytest ../tests -q       # backend tests
+cd frontend_v2 && npx eslint src && npm run build   # lint and build the web app
+```
 
-- **Two fallbacks, and they cover different failures.** `--replay` re-sends recorded events and the
-  server re-judges them, so it survives a broken monitored pipeline but not a dead network.
-  `--offline` replays recorded *verdicts* through `POST /replay`, makes no provider call at all, and
-  survives dead wifi or a dead provider. Replayed verdicts are marked `replayed` in the audit log
-  and badged `REPLAY` on the dashboard — a recording shown as a live verdict would be a lie.
-- **No auto-correction.** SentinelMind detects and explains; it does not intervene in the monitored
-  agent. The dashboard shows the button disabled rather than faking it.
-- **~6s cold start, now paid at boot.** The server fires a warm-up call on startup so the first
-  real verdict is not the one paying for TLS and pool setup. If the provider is unreachable at
-  boot the warm-up is skipped silently — refusing to start would break offline replay, which is
-  exactly the mode you need when the provider is unreachable.
-- **Nine eval cases** is a demonstration, not a generalisation.
-- **The demo wraps plain Python callables.** `@monitor` is framework-agnostic — a LangChain tool
-  wraps identically — but that path is not yet written or tested.
+[`ARCHITECTURE.md`](ARCHITECTURE.md) covers the internals, [`PLAN.md`](PLAN.md) the design
+decisions, and [`PROGRESS.md`](PROGRESS.md) what has been built and verified, including what went
+wrong along the way.
 
----
+## Author
 
-## Team
+Built by **Sudarsan**. The first prototype was built together with Jaaiwanth K and Adharshan N.
 
-**Codecrash** — Jaaiwanth K · Adharshan N · Sudarsan
+Thanks to [Groq](https://groq.com) for fast inference on open models, and to the React, Vite,
+Tailwind, Flask and Socket.IO projects.
 
-## Acknowledgements
-
-- [Groq](https://groq.com) — LPU inference for the meta-agent
-- [vis-network](https://visjs.github.io/vis-network/) — live trace graph
-- React, Flask, Flask-SocketIO
+MIT licensed; see [`LICENSE`](LICENSE).
