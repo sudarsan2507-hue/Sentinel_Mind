@@ -505,3 +505,24 @@ What changed, by finding:
 Verified: webapp-testing at 390/768/1440 (no sideways scroll, 0 console errors), Lighthouse on
 all 3 pages × 2 form factors, and a full real-agent E2E (20 steps, 20 judged, 0 degraded; the
 reasoning panel quotes the judge's real explanations). Tests: 174 passing.
+
+### 2026-10-11 — dashboard rebuilt as an analytical view
+
+The vertical node chain spent a screen of height on twelve boxes and hid the pattern that
+matters. Replaced with plain SVG/HTML views (no chart library; the dashboard no longer loads
+vis-network):
+
+- **Run timeline** — one lane per tool, one column per step, a thread through the run in order.
+  A loop is a lane lighting up repeatedly (the demo's `fetch_pricing` ×3 is unmissable).
+- **KPI tiles** — steps judged with a verdict-mix bar, anomaly rate, median/p95 verdict latency
+  with a sparkline, longest same-tool streak (computed, like the repeat signal).
+- **Verdict latency per step** (one axis, median marked) and **verdicts by tool** (stacked, most
+  anomalous first).
+- Everything is linked: hover any mark for the verdict, click to select it everywhere; the feed
+  scrolls to it. Feed cards carry a confidence meter, replay and degraded markers.
+- Status colour is always paired with shape (circle / triangle / diamond) and a label: the
+  dataviz validator puts green vs amber at ΔE 5.3 for protan vision, below the safe line.
+- Motion: steps pop in, bars grow, verdicts slide in — short ease-out, off for reduced motion.
+
+Lighthouse dashboard: desktop 99, mobile 90, accessibility 100, layout shift 0 (the page now
+draws once session + verdicts are in, instead of drawing empty and reflowing).

@@ -1,220 +1,120 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import { useSocket } from '../hooks/useSocket';
-
-/* ─── vis-network, bundled ───
-   Was injected from unpkg at runtime, so the trace graph silently stayed empty
-   on any machine without internet -- including a venue with bad wifi. A dynamic
-   import keeps it in its own chunk, so the landing page does not pay for it. */
-function loadVisNetwork() {
-  return import('vis-network/standalone');
-}
-
-/* ─── Colour map matching vis-network PENDING/OK/WARN/ANOMALY ─── */
-const VERDICT_COLORS = {
-  OK:      { border: '#00ff66', background: '#0a2115' },
-  WARN:    { border: '#fbbf24', background: '#2a1f08' },
-  ANOMALY: { border: '#f87171', background: '#2a0e0e' },
-  PENDING: { border: '#3b4b3a', background: '#1b1c1c' },
-};
-
-/* ─── Status pill ─── */
-const statusStyles = {
-  OK:      'bg-primary-container/15 text-primary-container border border-primary-container/20',
-  WARN:    'bg-amber-500/10 text-amber-400 border border-amber-500/20',
-  ANOMALY: 'bg-error/10 text-error border border-error/20',
-  PENDING: 'bg-surface-container-high text-on-surface-variant border border-outline-variant/30',
-};
-
-function StatusPill({ status }) {
-  return (
-    <span className={`font-label-sm text-[12px] font-bold tracking-widest px-2 py-0.5 rounded uppercase ${statusStyles[status] || statusStyles.PENDING}`}>
-      {status}
-    </span>
-  );
-}
-
-/* ─── Stat card ─── */
-function StatCard({ label, value, tone }) {
-  const toneClass = {
-    ok: 'text-primary-container',
-    warn: 'text-amber-400',
-    anomaly: 'text-error',
-    neutral: 'text-on-background',
-  }[tone] || 'text-on-background';
-
-  return (
-    <div className="bg-surface-container-low border border-outline-variant/20 rounded-xl p-5 flex flex-col gap-2">
-      <span className="font-label-sm text-[12px] text-on-surface-variant">{label}</span>
-      <span className={`font-headline-lg text-[28px] font-bold tabular-nums ${toneClass}`}>{value}</span>
-    </div>
-  );
-}
-
-/* ─── Trace Graph ─── */
-function TraceGraph({ nodes, edges }) {
-  const hostRef = useRef(null);
-  const netRef = useRef(null);
-  const dsRef = useRef({ nodes: null, edges: null });
-  // vis loads asynchronously. Nodes that arrive first (always, on a reload --
-  // /audit answers before the chunk does) were silently dropped, leaving
-  // "20 NODES" over an empty canvas. `ready` re-runs the sync once it exists.
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    loadVisNetwork().then((vis) => {
-      if (cancelled) return;
-      dsRef.current.nodes = new vis.DataSet();
-      dsRef.current.edges = new vis.DataSet();
-      netRef.current = new vis.Network(
-        hostRef.current,
-        { nodes: dsRef.current.nodes, edges: dsRef.current.edges },
-        {
-          nodes: {
-            shape: 'box',
-            font: { color: '#e3e2e2', size: 12, face: 'JetBrains Mono, monospace' },
-            margin: 10,
-            borderWidth: 1,
-            shapeProperties: { borderRadius: 6 },
-          },
-          edges: { color: '#3b4b3a', arrows: 'to', smooth: { type: 'cubicBezier' } },
-          layout: { hierarchical: { direction: 'UD', sortMethod: 'directed', nodeSpacing: 160 } },
-          physics: false,
-          interaction: { hover: true, zoomView: true },
-        }
-      );
-      setReady(true);
-    });
-    return () => { cancelled = true; netRef.current?.destroy(); };
-  }, []);
-
-  useEffect(() => {
-    const ns = dsRef.current.nodes;
-    const es = dsRef.current.edges;
-    if (!ns || !es) return;
-
-    nodes.forEach((n) => {
-      const item = { id: n.id, label: n.label, color: VERDICT_COLORS[n.status] || VERDICT_COLORS.PENDING, title: n.title || '' };
-      ns.get(n.id) ? ns.update(item) : ns.add(item);
-    });
-    edges.forEach((e) => {
-      if (!es.get(e.id)) es.add(e);
-    });
-    const net = netRef.current;
-    if (!net || !nodes.length) return;
-    // fit() alone shrank a 20-step run to unreadable dashes. Fit while it is
-    // legible; past that, hold a readable zoom and follow the newest step --
-    // which is the one a developer mid-incident is looking at. Drag to scroll back.
-    // Deferred one draw: new nodes have no layout position until vis redraws.
-    net.once('afterDrawing', () => {
-      net.fit({ animation: false });
-      const MIN_SCALE = 0.75;
-      if (net.getScale() < MIN_SCALE) {
-        const newest = nodes[nodes.length - 1].id;
-        const pos = net.getPositions([newest])[newest];
-        // Newest step near the bottom edge, so the view is the recent history.
-        const lift = ((hostRef.current?.clientHeight || 400) / 2 - 60) / MIN_SCALE;
-        if (pos) net.moveTo({ position: { x: pos.x, y: pos.y - lift }, scale: MIN_SCALE, animation: { duration: 300 } });
-      }
-    });
-    net.redraw();
-  }, [nodes, edges, ready]);
-
-  return <div ref={hostRef} className="w-full h-full" />;
-}
-
-/* ─── Main Dashboard Page ─── */
+import {
+  StatusMark, StatusLegend, MixBar, Sparkline, Tile,
+  RunTimeline, LatencyChart, ToolBreakdown, Confidence,
+} from '../components/dashboard/viz';
+import { STATUS, quantile, fmtS } from '../components/dashboard/status';
 
 const headerButton = 'inline-flex min-h-11 items-center rounded-md border border-outline-variant/50 px-3 text-[14px] text-on-background hover:bg-surface-container-high active:bg-surface-container-high transition-colors';
+
+function Panel({ title, aside, children, className = '', bodyClass = 'p-5' }) {
+  return (
+    <section className={`rounded-xl border border-outline-variant/40 bg-surface-container-low overflow-hidden ${className}`}>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 pt-4">
+        <h2 className="font-headline-lg text-[17px] text-on-background">{title}</h2>
+        {aside}
+      </div>
+      <div className={bodyClass}>{children}</div>
+    </section>
+  );
+}
+
+/* Longest run of consecutive calls to the same tool -- the visible face of a
+   loop. Computed, like the server's repeat signal, not inferred. */
+function longestStreak(steps) {
+  let best = { tool: null, n: 0 };
+  let cur = { tool: null, n: 0 };
+  steps.forEach((s) => {
+    cur = s.tool === cur.tool ? { tool: s.tool, n: cur.n + 1 } : { tool: s.tool, n: 1 };
+    if (cur.n > best.n) best = cur;
+  });
+  return best;
+}
+
+const fromEntry = (e) => ({
+  id: e.event.id,
+  tool: e.event.tool,
+  status: e.status,
+  text: e.verdict.explanation,
+  latency: e.verdict.latency_ms,
+  duration: e.event.duration_ms,
+  confidence: e.verdict.confidence,
+  degraded: e.verdict.degraded,
+  replayed: e.verdict.replayed,
+});
 
 export default function Dashboard() {
   const { connected, on } = useSocket();
 
-  const [entries, setEntries] = useState([]);
-  const [nodes, setNodes] = useState([]);
-  const [edges, setEdges] = useState([]);
+  // steps: every traced step in run order, PENDING until its verdict lands.
+  const [steps, setSteps] = useState([]);
   const [goal, setGoal] = useState('');
   const [model, setModel] = useState('');
+  const [selected, setSelected] = useState(null);
+  const [ready, setReady] = useState(false);
+  const feedRef = useRef(null);
 
   useEffect(() => {
     document.title = 'Live dashboard · SentinelMind';
   }, []);
-  const lastNodeId = useRef(null);
 
-  /* Add a pending (grey) node as soon as trace arrives */
-  const addPending = useCallback((event) => {
-    setNodes((prev) => {
-      if (prev.some((n) => n.id === event.id)) return prev;
-      return [...prev, { id: event.id, label: event.tool, status: 'PENDING', title: 'awaiting verdict…' }];
-    });
-    setEdges((prev) => {
-      const from = lastNodeId.current;
-      lastNodeId.current = event.id;
-      if (!from) return prev;
-      return [...prev, { id: `${from}->${event.id}`, from, to: event.id }];
-    });
-  }, []);
+  const reset = useCallback(() => { setSteps([]); setSelected(null); }, []);
 
-  /* Wire socket events */
   useEffect(() => {
     const offs = [
-      on('trace', addPending),
-      on('verdict', (entry) => {
-        setEntries((prev) => [entry, ...prev].slice(0, 200));
-        setNodes((prev) => {
-          const id = entry.event.id;
-          const patch = { id, label: entry.event.tool, status: entry.status, title: entry.verdict.explanation };
-          return prev.some((n) => n.id === id)
-            ? prev.map((n) => (n.id === id ? patch : n))
-            : [...prev, patch];
-        });
-      }),
-      on('goal', (d) => {
-        setGoal(d.goal);
-        setEntries([]); setNodes([]); setEdges([]);
-        lastNodeId.current = null;
-      }),
-      on('cleared', () => {
-        setEntries([]); setNodes([]); setEdges([]);
-        lastNodeId.current = null;
-      }),
+      on('trace', (event) => setSteps((prev) => (
+        prev.some((s) => s.id === event.id)
+          ? prev
+          : [...prev, { id: event.id, tool: event.tool, status: 'PENDING', duration: event.duration_ms }]
+      ))),
+      on('verdict', (entry) => setSteps((prev) => {
+        const next = fromEntry(entry);
+        return prev.some((s) => s.id === next.id)
+          ? prev.map((s) => (s.id === next.id ? next : s))
+          : [...prev, next];
+      })),
+      on('goal', (d) => { setGoal(d.goal); reset(); }),
+      on('cleared', reset),
     ];
     return () => offs.forEach((off) => off && off());
-  }, [on, addPending]);
+  }, [on, reset]);
 
   /* Rehydrate on mount */
   useEffect(() => {
-    fetch('/session').then((r) => r.json()).then((d) => setGoal(d.goal || ''));
     // The judge model is configuration, not copy -- ask the server which one is live.
     fetch('/health').then((r) => r.json()).then((d) => setModel(d.model || '')).catch(() => {});
-    fetch('/audit').then((r) => r.json()).then((d) => {
-      if (!d.entries?.length) return;
-      const all = [...d.entries].reverse().slice(0, 200);
-      setEntries(all);
-      setNodes(d.entries.map((e) => ({
-        id: e.event.id, label: e.event.tool, status: e.status, title: e.verdict.explanation,
-      })));
-      setEdges(d.entries.slice(1).map((e, i) => ({
-        id: `${d.entries[i].event.id}->${e.event.id}`,
-        from: d.entries[i].event.id,
-        to: e.event.id,
-      })));
-      lastNodeId.current = d.entries[d.entries.length - 1].event.id;
-    });
+    // Draw the page once the session and its verdicts are in. Drawing it empty
+    // first and filling in moved every tile below the goal box (layout shift
+    // 0.08 on phones); both answers take a few milliseconds locally.
+    Promise.allSettled([
+      fetch('/session').then((r) => r.json()).then((d) => setGoal(d.goal || '')),
+      fetch('/audit').then((r) => r.json()).then((d) => {
+        if (d.entries?.length) setSteps(d.entries.map(fromEntry));
+      }),
+    ]).then(() => setReady(true));
   }, []);
 
-  /* Derived stats */
-  const counts = entries.reduce(
-    (acc, e) => ({ ...acc, [e.status]: (acc[e.status] || 0) + 1 }),
-    { OK: 0, WARN: 0, ANOMALY: 0 }
-  );
-  const latencies = entries.map((e) => e.verdict.latency_ms).filter(Number.isFinite);
-  const mttd = latencies.length
-    ? (latencies.reduce((a, b) => a + b, 0) / latencies.length / 1000).toFixed(2) + 's'
-    : '—';
-  const latestAnomaly = entries.find((e) => e.status === 'ANOMALY');
+  /* Selecting a step anywhere scrolls the feed to it. */
+  useEffect(() => {
+    if (!selected) return;
+    feedRef.current?.querySelector(`[data-step="${CSS.escape(selected)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [selected]);
+
+  /* Derived */
+  const judged = steps.filter((s) => s.status !== 'PENDING');
+  const counts = judged.reduce((a, s) => ({ ...a, [s.status]: (a[s.status] || 0) + 1 }), { OK: 0, WARN: 0, ANOMALY: 0 });
+  const latencies = judged.map((s) => s.latency).filter(Number.isFinite);
+  const p50 = quantile(latencies, 0.5);
+  const p95 = quantile(latencies, 0.95);
+  const anomalyRate = judged.length ? Math.round((counts.ANOMALY / judged.length) * 100) : null;
+  const streak = useMemo(() => longestStreak(steps), [steps]);
+  const pending = steps.length - judged.length;
+  const latestAnomaly = [...judged].reverse().find((s) => s.status === 'ANOMALY');
+  const stepNo = useMemo(() => new Map(steps.map((s, i) => [s.id, i + 1])), [steps]);
+  const feed = [...judged].reverse();
 
   return (
     <div className="min-h-screen bg-[#050505] text-on-background font-body-md">
@@ -226,23 +126,15 @@ export default function Dashboard() {
               SentinelMind
             </Link>
             <span className="flex items-center gap-2 text-[14px] text-on-surface-variant" role="status">
-              <span
-                aria-hidden="true"
-                className={`w-2 h-2 rounded-full transition-colors ${
-                  connected ? 'bg-primary-container shadow-[0_0_6px_rgba(0,255,102,0.5)]' : 'bg-on-surface-variant/50'
-                }`}
-              />
+              <span className="relative flex w-2 h-2" aria-hidden="true">
+                {connected && <span className="absolute inset-0 rounded-full bg-primary-container opacity-60 animate-ping" />}
+                <span className={`relative w-2 h-2 rounded-full ${connected ? 'bg-primary-container' : 'bg-on-surface-variant/50'}`} />
+              </span>
               {connected ? 'Live' : 'Disconnected'}
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <a
-              href="/audit/export"
-              download
-              className={headerButton}
-            >
-              Export log
-            </a>
+            <a href="/audit/export" download className={headerButton}>Export log</a>
             <button
               type="button"
               onClick={() => {
@@ -263,115 +155,151 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <main className="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-8 flex flex-col gap-6">
-
-        {/* ── Goal display ── */}
-        <div className={`rounded-xl border px-5 py-3 font-body-md text-[16px] md:text-[14px] flex items-center gap-3 ${
-          goal
-            ? 'bg-surface-container-low border-outline-variant/20'
-            : 'bg-amber-500/5 border-amber-500/20'
-        }`}>
-          <span className="font-label-sm text-[12px] text-on-surface-variant shrink-0">Monitored goal</span>
-          <span className={goal ? 'text-on-surface-variant' : 'text-amber-400 italic'}>
-            {goal || 'Not declared — goal drift cannot be assessed for this run.'}
-          </span>
-        </div>
-
-        {/* ── Anomaly banner ── */}
-        {latestAnomaly && (
-          <div className="rounded-xl border border-error/30 bg-error/5 border-l-4 border-l-error px-5 py-4">
-            <div className="font-label-sm text-[12px] text-error font-bold mb-1.5">
-              Anomaly detected — {latestAnomaly.event.tool}
-            </div>
-            <div className="font-body-md text-[16px] md:text-[14px] text-on-surface-variant">{latestAnomaly.verdict.explanation}</div>
+      {!ready ? <main className="min-h-screen" aria-busy="true" /> : (
+      <main className="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-6 md:py-8 flex flex-col gap-5">
+        {/* ── Goal + latest anomaly ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.2fr] gap-5">
+          <div className={`rounded-xl border px-5 py-4 ${goal ? 'border-outline-variant/40 bg-surface-container-low' : 'border-amber-500/30 bg-amber-500/5'}`}>
+            <p className="text-[13px] text-on-surface-variant">Session goal</p>
+            <p className={`mt-1 text-[16px] leading-snug ${goal ? 'text-on-background' : 'text-amber-300'}`}>
+              {goal || 'Not declared, so drift from the goal cannot be judged for this run.'}
+            </p>
           </div>
-        )}
-
-        {/* ── Stat cards ── */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-          <StatCard label="Steps observed" value={entries.length} tone="neutral" />
-          <StatCard label="OK" value={counts.OK} tone="ok" />
-          <StatCard label="Warn" value={counts.WARN} tone="warn" />
-          <StatCard label="Anomaly" value={counts.ANOMALY} tone="anomaly" />
-          <StatCard label="Mean time to detect" value={mttd} tone="neutral" />
+          {latestAnomaly ? (
+            <button
+              type="button"
+              onClick={() => setSelected(latestAnomaly.id)}
+              className="anomaly-banner group text-left rounded-xl border border-error/40 bg-error/[0.06] px-5 py-4 hover:bg-error/10 transition-colors"
+            >
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-error">
+                <StatusMark status="ANOMALY" size={11} />
+                Latest anomaly · step {stepNo.get(latestAnomaly.id)}
+                <span className="font-label-sm text-[12px] text-on-background break-all">{latestAnomaly.tool}</span>
+                <span className="ml-auto text-on-surface-variant group-hover:text-on-background transition-colors">Show in feed</span>
+              </span>
+              <span className="mt-1 block text-[15px] leading-snug text-on-surface-variant line-clamp-2">{latestAnomaly.text}</span>
+            </button>
+          ) : (
+            <div className="rounded-xl border border-outline-variant/40 bg-surface-container-low px-5 py-4">
+              <p className="text-[13px] text-on-surface-variant">Latest anomaly</p>
+              <p className="mt-1 text-[16px] text-on-background">None yet.</p>
+            </div>
+          )}
         </div>
 
-        {/* ── Main grid: trace graph + verdict feed ── */}
-        <div className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] gap-6">
-          {/* Trace graph */}
-          <div className="bg-surface-container-low border border-outline-variant/20 rounded-2xl overflow-hidden flex flex-col">
-            <div className="px-6 py-4 border-b border-outline-variant/15 flex items-center justify-between">
-              <h2 className="font-headline-lg text-[17px] text-on-background">Live Trace Graph</h2>
-              <span className="font-label-sm text-[12px] text-on-surface-variant">{nodes.length} nodes</span>
-            </div>
-            <div className={`${nodes.length ? 'h-[420px] md:h-[480px]' : 'h-48 md:h-[480px]'} p-2`}>
-              {nodes.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center gap-2 px-6 text-center text-on-surface-variant">
-                  <p className="text-[16px] text-on-background">No steps yet</p>
-                  <p className="text-[15px] max-w-[300px]">Run <code className="font-label-sm text-primary-container">python backend/real_agent.py</code> and each step appears here as it is judged.</p>
-                </div>
-              ) : (
-                <TraceGraph nodes={nodes} edges={edges} />
-              )}
-            </div>
+        {/* ── KPI tiles ── */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-5">
+          <Tile label="Steps judged" value={judged.length} sub={pending ? `${pending} being judged` : `${counts.OK} OK · ${counts.WARN} warn · ${counts.ANOMALY} anomaly`}>
+            <MixBar counts={counts} />
+          </Tile>
+          <Tile
+            label="Anomaly rate"
+            value={anomalyRate == null ? '—' : `${anomalyRate}%`}
+            tone={anomalyRate > 30 ? 'text-error' : anomalyRate > 0 ? 'text-amber-300' : 'text-primary-container'}
+            sub={anomalyRate == null ? 'no verdicts yet' : `${counts.ANOMALY} of ${judged.length} steps`}
+          />
+          <Tile label="Verdict latency" value={fmtS(p50)} sub={latencies.length ? `median · p95 ${fmtS(p95)}` : 'median'}>
+            <Sparkline values={latencies} />
+          </Tile>
+          <Tile
+            label="Longest repeat"
+            value={streak.n > 1 ? `×${streak.n}` : '—'}
+            tone={streak.n >= 3 ? 'text-error' : streak.n === 2 ? 'text-amber-300' : 'text-on-background'}
+            sub={streak.n > 1 ? <span className="font-label-sm text-[12px] break-all">{streak.tool} in a row</span> : 'no tool called twice in a row'}
+          />
+        </div>
+
+        {/* ── Timeline + charts | feed ── */}
+        <div className="grid grid-cols-1 xl:grid-cols-[1.55fr_1fr] gap-5 items-start">
+          <div className="flex flex-col gap-5 min-w-0">
+            <Panel
+              title="Run timeline"
+              aside={<StatusLegend statuses={['OK', 'WARN', 'ANOMALY', 'PENDING']} />}
+              bodyClass="px-3 pb-4 pt-2"
+            >
+              <p className="px-2 pb-2 text-[13px] text-on-surface-variant">One lane per tool, one column per step. A lane lighting up again and again is a loop.</p>
+              <RunTimeline steps={steps} selected={selected} onSelect={setSelected} />
+            </Panel>
+            <Panel title="Verdict latency per step" aside={<span className="text-[13px] text-on-surface-variant">time from trace to verdict; colour is the verdict</span>}>
+              <LatencyChart steps={steps} selected={selected} onSelect={setSelected} />
+            </Panel>
+            <Panel title="Verdicts by tool" aside={<StatusLegend />}>
+              <ToolBreakdown
+                steps={steps}
+                onPickTool={(tool) => {
+                  const last = [...judged].reverse().find((s) => s.tool === tool);
+                  if (last) setSelected(last.id);
+                }}
+              />
+            </Panel>
           </div>
 
           {/* Verdict feed */}
-          <div className="bg-surface-container-low border border-outline-variant/20 rounded-2xl overflow-hidden flex flex-col">
-            <div className="px-6 py-4 border-b border-outline-variant/15">
-              <h2 className="font-headline-lg text-[17px] text-on-background">Verdict Feed</h2>
-            </div>
-            <div className="flex-1 overflow-y-auto max-h-[480px]">
-              {entries.length === 0 ? (
-                <p className="px-6 py-10 text-center text-[16px] md:text-[15px] text-on-surface-variant">Verdicts appear here, newest first.</p>
-              ) : (
-                entries.map((e) => (
-                  <div
-                    key={e.sequence}
-                    className={`px-5 py-4 border-b border-outline-variant/10 border-l-2 transition-colors ${
-                      e.status === 'ANOMALY'
-                        ? 'border-l-error bg-error/5'
-                        : e.status === 'WARN'
-                        ? 'border-l-amber-500'
-                        : 'border-l-primary-container/40'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <StatusPill status={e.status} />
-                      <span className="font-label-sm text-[12px] text-primary-container">{e.event.tool}</span>
-                      <span className="ml-auto font-label-sm text-[12px] text-on-surface-variant tabular-nums">
-                        {e.event.duration_ms}ms · {(e.verdict.latency_ms / 1000).toFixed(2)}s
-                      </span>
-                    </div>
-                    <p className={`font-body-md text-[15px] md:text-[14px] leading-snug ${e.verdict.degraded ? 'text-on-surface-variant italic' : 'text-on-surface-variant'}`}>
-                      {e.verdict.explanation}
-                    </p>
-                  </div>
-                ))
+          <Panel
+            title="Verdict feed"
+            aside={<span className="text-[13px] text-on-surface-variant">newest first</span>}
+            className="xl:sticky xl:top-20"
+            bodyClass="pt-3"
+          >
+            <ol ref={feedRef} className="min-h-[320px] max-h-[560px] xl:max-h-[calc(100vh-11rem)] overflow-y-auto overscroll-contain px-3 pb-3 flex flex-col gap-2">
+              {feed.length === 0 && (
+                <li className="px-3 py-10 text-center text-[15px] text-on-surface-variant">
+                  Run <code className="font-label-sm text-primary-container">python backend/real_agent.py</code> and each verdict lands here.
+                </li>
               )}
-            </div>
-          </div>
+              {feed.map((s) => {
+                const sel = selected === s.id;
+                return (
+                  <li key={s.id} data-step={s.id} className="feed-item">
+                    <button
+                      type="button"
+                      onClick={() => setSelected(sel ? null : s.id)}
+                      className={`w-full text-left rounded-lg border px-4 py-3 transition-colors ${
+                        sel ? 'border-on-surface-variant bg-surface-container-high' : 'border-outline-variant/30 hover:border-outline-variant/70'
+                      }`}
+                      style={{ boxShadow: `inset 3px 0 0 ${STATUS[s.status].color}` }}
+                    >
+                      <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-on-background">
+                          <StatusMark status={s.status} size={11} />
+                          {STATUS[s.status].label}
+                        </span>
+                        <span className="font-label-sm text-[12px] text-primary-container break-all">{s.tool}</span>
+                        <span className="ml-auto text-[12px] tabular-nums text-on-surface-variant">step {stepNo.get(s.id)} · {fmtS(s.latency)}</span>
+                      </span>
+                      <span className={`mt-1.5 block text-[15px] md:text-[14px] leading-snug ${s.degraded ? 'italic text-on-surface-variant' : 'text-on-surface-variant'}`}>
+                        {s.text}
+                      </span>
+                      <span className="mt-2 flex items-center gap-3">
+                        <Confidence value={s.confidence} />
+                        {s.degraded && <span className="text-[12px] text-amber-300">judge unavailable</span>}
+                        {s.replayed && <span className="text-[12px] text-on-surface-variant">replayed</span>}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+          </Panel>
         </div>
 
-        {/* ── Knowledge Graph CTA ── */}
+        {/* ── Failure memory ── */}
         <Link
           to="/graph"
-          className="flex items-center justify-between p-5 bg-surface-container-low border border-primary-container/20 rounded-2xl hover:border-primary-container/40 hover:bg-primary-container/5 transition-all group"
+          className="group flex items-center justify-between gap-4 rounded-xl border border-primary-container/25 bg-surface-container-low p-5 hover:border-primary-container/50 hover:bg-primary-container/[0.04] transition-colors"
         >
-          <div className="flex flex-col gap-1">
-            <span className="font-headline-lg text-[17px] text-on-background">Failure memory</span>
-            <span className="font-body-md text-[16px] md:text-[13px] text-on-surface-variant">
-              How this agent has failed across runs, why, and the lessons fed back to it.
-            </span>
-          </div>
-          <ArrowRight aria-hidden="true" className="text-primary-container group-hover:translate-x-1 transition-transform w-6 h-6 shrink-0 ml-4" />
+          <span>
+            <span className="block font-headline-lg text-[17px] text-on-background">Failure memory</span>
+            <span className="block mt-0.5 text-[15px] text-on-surface-variant">How this agent has failed across runs, why, and the lessons fed back to it.</span>
+          </span>
+          <ArrowRight aria-hidden="true" className="text-primary-container group-hover:translate-x-1 transition-transform w-6 h-6 shrink-0" />
         </Link>
-
       </main>
+      )}
 
-      <footer className="border-t border-outline-variant/10 py-6 px-margin-mobile md:px-margin-desktop mt-4">
-        <p className="font-label-sm text-[12px] text-on-surface-variant text-center">
-          Meta-agent: {model || '…'} via Groq · Codecrash · FRONTIER 2026 · VIT Chennai
+      <footer className="border-t border-outline-variant/20 py-6 px-margin-mobile md:px-margin-desktop mt-4">
+        <p className="text-[13px] text-on-surface-variant text-center">
+          Judge: {model || '…'} via Groq · Codecrash · FRONTIER 2026 · VIT Chennai
         </p>
       </footer>
     </div>
