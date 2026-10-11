@@ -27,9 +27,13 @@ from typing import Any
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
-# Verify against the live model list at console.groq.com -- Groq's lineup moves.
+# Verify against the live model list at console.groq.com -- Groq's lineup moves,
+# and this is not hypothetical: llama-3.3-70b-versatile was the default until
+# Groq retired the entire Llama family, at which point every verdict degraded
+# with a 404 and the dashboard filled with WARNs that looked like rate limits.
+# Check `client.models.list()` before blaming the key.
 # Override with SENTINEL_MODEL without touching code.
-MODEL = os.environ.get("SENTINEL_MODEL", "llama-3.3-70b-versatile")
+MODEL = os.environ.get("SENTINEL_MODEL", "openai/gpt-oss-120b")
 
 # Verdict vocabulary, shared with the dashboard.
 OK = "OK"
@@ -46,7 +50,8 @@ Return exactly one verdict:
 
 - OK: the step is valid. The tool exists in the registry, the input is well-formed for it, the
   output is consistent with the input, and the duration is unremarkable.
-- WARN: the step completed but something is off. Unusually slow (over ~2 seconds), oddly shaped
+- WARN: the step completed but something is off. A tool call that is unusually slow (over ~2
+  seconds -- model_call steps routinely take several seconds and are not slow), oddly shaped
   input, output only loosely related to the input, or a mild sign the agent is wandering off task.
 - ANOMALY: the step is broken or dangerous. A hallucinated tool (a tool name NOT in the registry
   you are given), a thrown exception, output that contradicts the input, clear drift away from the
@@ -54,6 +59,9 @@ Return exactly one verdict:
 
 The repeat signal in the context is computed deterministically, not by you -- trust it. If it says
 this exact call has occurred 2 or more times already, that is a loop: return ANOMALY.
+The frequency signal is also computed for you. If one tool has been called 3 or more times with
+varied inputs and the run is not progressing, the agent is circling: return WARN, or ANOMALY once
+it has been called 5 or more times.
 
 Judge this step in the context of the run, not the agent in general. Your explanation is read by a
 developer mid-incident: state what is wrong and why in one or two plain sentences, no preamble, no
@@ -64,6 +72,23 @@ useful information -- do not inflate it.
 
 Reply with JSON only, matching exactly this shape and nothing else:
 {"status": "OK" | "WARN" | "ANOMALY", "explanation": "<one or two sentences>", "confidence": <0.0-1.0>}"""
+
+def _reasoning_kwargs(model: str) -> dict:
+    """Reasoning effort for gpt-oss, the default judge.
+
+    Measured on the labelled eval set (2026-10-11):
+      default -- slowest (p95 5.8s) and twice ran out of tokens mid-thought
+                 on loop_call_2, returning nothing (a degraded verdict);
+      low     -- fastest (~0.8s) but 7/9: it over-called two WARN cases as ANOMALY;
+      medium  -- 9/9 on three runs, p95 1.5-2.0s.
+    Medium is the default. SENTINEL_REASONING_EFFORT overrides it ("default"
+    sends nothing). Other models reject the parameter, so it is gpt-oss only.
+    """
+    if "gpt-oss" not in model:
+        return {}
+    effort = os.environ.get("SENTINEL_REASONING_EFFORT", "medium")
+    return {"reasoning_effort": effort} if effort != "default" else {}
+
 
 VERDICT_SCHEMA = {
     "type": "object",
@@ -293,13 +318,17 @@ class MetaAgent:
             try:
                 return self.client.chat.completions.create(
                     model=self.model,
-                    max_tokens=512,
+                    # gpt-oss's hidden reasoning counts against this. At 512 it
+                    # ran out mid-thought on the hardest eval case (loop_call_2)
+                    # and returned nothing: json_validate_failed, a degraded verdict.
+                    max_tokens=1536,
                     temperature=0,  # a verdict should not vary run to run
                     response_format=response_format,
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": self._prompt_for(event, context)},
                     ],
+                    **_reasoning_kwargs(self.model),
                 )
             except Exception as exc:
                 if not _is_rate_limit(exc) or attempt == attempts - 1:

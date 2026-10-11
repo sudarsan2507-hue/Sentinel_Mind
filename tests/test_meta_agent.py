@@ -232,3 +232,23 @@ def test_verdict_has_all_required_fields(sample_event):
         assert field in verdict, f"verdict missing {field}"
     assert verdict["status"] in (OK, WARN, ANOMALY)
     assert 0.0 <= verdict["confidence"] <= 1.0
+
+
+def test_reasoning_effort_is_medium_for_gpt_oss_and_absent_otherwise(monkeypatch):
+    """Medium scored 9/9 where low over-called and default ran out of tokens.
+    Models that do not know the parameter must not receive it."""
+    from meta_agent import _reasoning_kwargs
+
+    monkeypatch.delenv("SENTINEL_REASONING_EFFORT", raising=False)
+    assert _reasoning_kwargs("openai/gpt-oss-120b") == {"reasoning_effort": "medium"}
+    assert _reasoning_kwargs("llama-3.3-70b-versatile") == {}
+
+    monkeypatch.setenv("SENTINEL_REASONING_EFFORT", "low")
+    assert _reasoning_kwargs("openai/gpt-oss-120b") == {"reasoning_effort": "low"}
+    monkeypatch.setenv("SENTINEL_REASONING_EFFORT", "default")
+    assert _reasoning_kwargs("openai/gpt-oss-120b") == {}
+
+
+def test_prompt_does_not_call_model_latency_slow_and_explains_frequency():
+    assert "model_call steps routinely take several seconds" in SYSTEM_PROMPT
+    assert "frequency signal" in SYSTEM_PROMPT
