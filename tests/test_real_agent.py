@@ -233,6 +233,8 @@ class FakeCompletions:
     def create(self, **kwargs):
         self.calls += 1
         message = self._turns.pop(0) if self._turns else FakeMessage("done", None)
+        if isinstance(message, Exception):
+            raise message
         return type("R", (), {"choices": [type("C", (), {"message": message})()]})()
 
 
@@ -351,3 +353,30 @@ def test_without_learn_the_prompt_is_untouched(monkeypatch):
     real_agent.run_agent("task", max_steps=1)
 
     assert seen["messages"][0]["content"] == real_agent.SYSTEM_PROMPT
+
+
+def test_a_provider_rejected_tool_call_is_fed_back_and_retried(monkeypatch, traced):
+    """Groq rejects unparseable tool-call JSON with tool_use_failed before we
+    ever see it. Seen live: that ended a run at step 3. The agent retries, a
+    bounded number of times, so a model that never produces JSON still stops."""
+    rejected = RuntimeError("Error code: 400 - {'code': 'tool_use_failed'}")
+    ok = FakeMessage(None, [FakeToolCall("search_docs", '{"query": "refund"}')])
+    client, completions = _client([rejected, ok, FakeMessage("done", None)])
+    monkeypatch.setattr(real_agent, "build_client", lambda: client)
+
+    real_agent.run_agent("task", max_steps=5)
+
+    assert completions.calls == 3  # rejected, retried, finished
+    assert any(e["tool"] == "search_docs" for e in traced)
+
+    client, completions = _client([rejected] * 10)
+    monkeypatch.setattr(real_agent, "build_client", lambda: client)
+    real_agent.run_agent("task", max_steps=10)
+    assert completions.calls == 3  # two retries, then gives up
+
+
+def test_other_model_failures_still_end_the_run(monkeypatch):
+    client, completions = _client([RuntimeError("401 invalid api key")] * 3)
+    monkeypatch.setattr(real_agent, "build_client", lambda: client)
+    real_agent.run_agent("task", max_steps=5)
+    assert completions.calls == 1
