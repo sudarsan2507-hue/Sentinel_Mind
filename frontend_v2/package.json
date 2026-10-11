@@ -16,9 +16,7 @@
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.2",
     "socket.io-client": "^4.8.3",
-    "tailwindcss": "^4.3.3",
-    "vis-data": "^7.1.9",
-    "vis-network": "^9.1.9"
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
