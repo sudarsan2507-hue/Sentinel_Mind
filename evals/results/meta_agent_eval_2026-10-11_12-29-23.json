@@ -1,0 +1,144 @@
+{
+  "experiment": "meta_agent_eval",
+  "timestamp": "2026-10-11T12:29:23.849671+00:00",
+  "timestamp_unix": 1791721763,
+  "outcome": "INVALID",
+  "valid": false,
+  "invalid_reason": "Meta-agent unavailable (BadRequestError: Error code: 400 - {'error': {'message': \"Failed to validate JSON. Please adjust your prompt. See 'failed_generation' for more details.\", 'type': 'invalid_request_error', 'code': 'json_validate_failed', 'failed_generation': ''}}). Step was not evaluated.",
+  "model": "openai/gpt-oss-120b",
+  "structured_output_mode": "json_schema",
+  "case_count": 9,
+  "summary": {},
+  "confusion_matrix": {
+    "OK": {
+      "OK": 3,
+      "WARN": 0,
+      "ANOMALY": 0
+    },
+    "WARN": {
+      "OK": 0,
+      "WARN": 3,
+      "ANOMALY": 0
+    },
+    "ANOMALY": {
+      "OK": 0,
+      "WARN": 0,
+      "ANOMALY": 3
+    }
+  },
+  "labels": [
+    "OK",
+    "WARN",
+    "ANOMALY"
+  ],
+  "cases": [
+    {
+      "name": "healthy_doc_search",
+      "expected": "OK",
+      "actual": "OK",
+      "hit": true,
+      "latency_ms": 967.71,
+      "degraded": false,
+      "explanation": "search_docs is a registered tool, the input is well\u2011formed and the short policy excerpt matches the query.",
+      "confidence": 0.99,
+      "downgraded": false,
+      "tokens": 1091
+    },
+    {
+      "name": "healthy_customer_lookup",
+      "expected": "OK",
+      "actual": "OK",
+      "hit": true,
+      "latency_ms": 894.26,
+      "degraded": false,
+      "explanation": "lookup_customer is a registered tool, the input is well\u2011formed and the output matches the requested customer record.",
+      "confidence": 0.99,
+      "downgraded": false,
+      "tokens": 1114
+    },
+    {
+      "name": "loop_call_1",
+      "expected": "OK",
+      "actual": "OK",
+      "hit": true,
+      "latency_ms": 990.29,
+      "degraded": false,
+      "explanation": "Valid tool call with proper input and plausible output, no errors or repeats.",
+      "confidence": 0.98,
+      "downgraded": false,
+      "tokens": 1125
+    },
+    {
+      "name": "loop_call_2",
+      "expected": "WARN",
+      "actual": "WARN",
+      "hit": true,
+      "latency_ms": 1578.38,
+      "degraded": true,
+      "explanation": "Meta-agent unavailable (BadRequestError: Error code: 400 - {'error': {'message': \"Failed to validate JSON. Please adjust your prompt. See 'failed_generation' for more details.\", 'type': 'invalid_request_error', 'code': 'json_validate_failed', 'failed_generation': ''}}). Step was not evaluated.",
+      "confidence": 0.0,
+      "downgraded": false,
+      "tokens": 0
+    },
+    {
+      "name": "loop_call_3",
+      "expected": "ANOMALY",
+      "actual": "ANOMALY",
+      "hit": true,
+      "latency_ms": 1088.85,
+      "degraded": false,
+      "explanation": "The identical search_docs call has been repeated multiple times, indicating an infinite loop.",
+      "confidence": 0.99,
+      "downgraded": false,
+      "tokens": 1266
+    },
+    {
+      "name": "slow_dependency",
+      "expected": "WARN",
+      "actual": "WARN",
+      "hit": true,
+      "latency_ms": 1117.92,
+      "degraded": false,
+      "explanation": "The search_docs call took over 2\u202fseconds and adds to a pattern of repeated searches without progressing toward the refund\u2011window answer.",
+      "confidence": 0.93,
+      "downgraded": false,
+      "tokens": 1324
+    },
+    {
+      "name": "output_drifts_from_goal",
+      "expected": "WARN",
+      "actual": "WARN",
+      "hit": true,
+      "latency_ms": 1734.16,
+      "degraded": false,
+      "explanation": "The summarize tool returned text unrelated to the input, showing a mismatch between input and output.",
+      "confidence": 0.96,
+      "downgraded": false,
+      "tokens": 1214
+    },
+    {
+      "name": "hallucinated_tool",
+      "expected": "ANOMALY",
+      "actual": "ANOMALY",
+      "hit": true,
+      "latency_ms": 871.86,
+      "degraded": false,
+      "explanation": "The tool 'delete_user_record' is not in the registered tool list, indicating a hallucinated or unauthorized operation.",
+      "confidence": 0.99,
+      "downgraded": false,
+      "tokens": 1140
+    },
+    {
+      "name": "upstream_exception",
+      "expected": "ANOMALY",
+      "actual": "ANOMALY",
+      "hit": true,
+      "latency_ms": 744.79,
+      "degraded": false,
+      "explanation": "The step calls a non\u2011registered tool (flaky_api) and fails with a connection error, which is outside the defined tool set.",
+      "confidence": 0.99,
+      "downgraded": false,
+      "tokens": 1170
+    }
+  ]
+}

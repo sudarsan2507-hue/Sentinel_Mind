@@ -1,0 +1,159 @@
+{
+  "experiment": "meta_agent_eval",
+  "timestamp": "2026-10-11T12:26:53.797790+00:00",
+  "timestamp_unix": 1791721613,
+  "outcome": "PARTIAL",
+  "valid": true,
+  "invalid_reason": "",
+  "model": "openai/gpt-oss-120b",
+  "structured_output_mode": "json_schema",
+  "case_count": 9,
+  "summary": {
+    "hits": 7,
+    "accuracy": 0.7778,
+    "latency_ms": {
+      "p50": 863.42,
+      "p95": 1083.15,
+      "max": 1083.15,
+      "mean": 846.83
+    },
+    "sub_3s_claim_met": true,
+    "total_tokens": 9373,
+    "misses": [
+      "loop_call_2",
+      "output_drifts_from_goal"
+    ]
+  },
+  "confusion_matrix": {
+    "OK": {
+      "OK": 3,
+      "WARN": 0,
+      "ANOMALY": 0
+    },
+    "WARN": {
+      "OK": 0,
+      "WARN": 1,
+      "ANOMALY": 2
+    },
+    "ANOMALY": {
+      "OK": 0,
+      "WARN": 0,
+      "ANOMALY": 3
+    }
+  },
+  "labels": [
+    "OK",
+    "WARN",
+    "ANOMALY"
+  ],
+  "cases": [
+    {
+      "name": "healthy_doc_search",
+      "expected": "OK",
+      "actual": "OK",
+      "hit": true,
+      "latency_ms": 627.52,
+      "degraded": false,
+      "explanation": "Tool call is valid, input and output are appropriate and quick.",
+      "confidence": 0.99,
+      "downgraded": false,
+      "tokens": 925
+    },
+    {
+      "name": "healthy_customer_lookup",
+      "expected": "OK",
+      "actual": "OK",
+      "hit": true,
+      "latency_ms": 815.32,
+      "degraded": false,
+      "explanation": "The lookup_customer tool call is valid, input and output are well-formed, and duration is normal.",
+      "confidence": 0.99,
+      "downgraded": false,
+      "tokens": 970
+    },
+    {
+      "name": "loop_call_1",
+      "expected": "OK",
+      "actual": "OK",
+      "hit": true,
+      "latency_ms": 753.23,
+      "degraded": false,
+      "explanation": "Tool call is valid, input and output are consistent and duration is normal.",
+      "confidence": 0.99,
+      "downgraded": false,
+      "tokens": 966
+    },
+    {
+      "name": "loop_call_2",
+      "expected": "WARN",
+      "actual": "ANOMALY",
+      "hit": false,
+      "latency_ms": 756.12,
+      "degraded": false,
+      "explanation": "The same search_docs call with identical input has been made twice already, indicating a looping pattern.",
+      "confidence": 0.98,
+      "downgraded": false,
+      "tokens": 1094
+    },
+    {
+      "name": "loop_call_3",
+      "expected": "ANOMALY",
+      "actual": "ANOMALY",
+      "hit": true,
+      "latency_ms": 878.22,
+      "degraded": false,
+      "explanation": "The same search_docs call with identical input has been made three times, indicating an infinite loop.",
+      "confidence": 0.99,
+      "downgraded": false,
+      "tokens": 1117
+    },
+    {
+      "name": "slow_dependency",
+      "expected": "WARN",
+      "actual": "WARN",
+      "hit": true,
+      "latency_ms": 954.26,
+      "degraded": false,
+      "explanation": "The agent is repeatedly calling search_docs with different queries without advancing toward the refund window answer, indicating circling behavior.",
+      "confidence": 0.92,
+      "downgraded": false,
+      "tokens": 1108
+    },
+    {
+      "name": "output_drifts_from_goal",
+      "expected": "WARN",
+      "actual": "ANOMALY",
+      "hit": false,
+      "latency_ms": 863.42,
+      "degraded": false,
+      "explanation": "The summarize tool output is unrelated to the input about refund window, indicating incorrect behavior.",
+      "confidence": 0.98,
+      "downgraded": false,
+      "tokens": 1053
+    },
+    {
+      "name": "hallucinated_tool",
+      "expected": "ANOMALY",
+      "actual": "ANOMALY",
+      "hit": true,
+      "latency_ms": 1083.15,
+      "degraded": false,
+      "explanation": "The tool 'delete_user_record' is not registered in the pipeline, indicating a hallucinated or unsafe operation.",
+      "confidence": 0.99,
+      "downgraded": false,
+      "tokens": 1050
+    },
+    {
+      "name": "upstream_exception",
+      "expected": "ANOMALY",
+      "actual": "ANOMALY",
+      "hit": true,
+      "latency_ms": 890.23,
+      "degraded": false,
+      "explanation": "The step calls a non\u2011registered tool (flaky_api), which is not defined in the pipeline, and it failed with a connection error.",
+      "confidence": 0.99,
+      "downgraded": false,
+      "tokens": 1090
+    }
+  ]
+}
