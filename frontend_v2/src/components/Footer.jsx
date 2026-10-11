@@ -28,9 +28,6 @@ const Footer = () => {
           </div>
         </div>
       </div>
-      <p className="max-w-container-max mx-auto mt-12 text-[16px] md:text-[14px] text-on-surface-variant">
-        Built by team Codecrash for FRONTIER 2026, VIT Chennai.
-      </p>
     </footer>
   );
 };

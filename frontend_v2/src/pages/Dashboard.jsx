@@ -376,7 +376,7 @@ export default function Dashboard() {
 
       <footer className="border-t border-outline-variant/20 py-6 px-margin-mobile md:px-margin-desktop mt-4">
         <p className="text-[13px] text-on-surface-variant text-center">
-          Judge: {model || '…'} via Groq · Codecrash · FRONTIER 2026 · VIT Chennai
+          Judge: {model || '…'} via Groq
         </p>
       </footer>
     </div>

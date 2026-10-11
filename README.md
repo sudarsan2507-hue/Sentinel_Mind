@@ -11,9 +11,6 @@ what went wrong in plain English while there is still time to act.
 
 > **LangSmith logs. SentinelMind watches.**
 
-Built for [FRONTIER](https://vit.ac.in) — AWS Student Builder Groups, VIT Chennai, July 2026.
-Track 05: AI Safety & Observability.
-
 ---
 
 ## What it actually does
