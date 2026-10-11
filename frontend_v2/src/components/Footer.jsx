@@ -1,40 +1,36 @@
-﻿
+import { Link } from 'react-router-dom';
+import { ARCHITECTURE, DOCS, REPO } from '../lib/links';
+
+const link = 'inline-flex min-h-11 md:min-h-0 items-center text-[16px] md:text-[15px] text-on-surface-variant hover:text-on-background transition-colors';
+
 const Footer = () => {
   return (
-    <footer className="w-full py-12 px-margin-mobile md:px-margin-desktop bg-surface-container-lowest border-t border-outline-variant/20">
-      <div className="max-w-container-max mx-auto flex flex-col md:flex-row justify-between items-start md:items-center gap-8">
-        <div className="flex flex-col gap-4">
-          <span className="font-headline-lg text-[20px] font-bold text-on-background">SentinelMind</span>
-          <p className="font-label-sm text-on-surface-variant/60 max-w-xs">High-performance observability for the next generation of autonomous AI systems.</p>
+    <footer className="px-margin-mobile md:px-margin-desktop py-12 border-t border-outline-variant/40">
+      <div className="max-w-container-max mx-auto flex flex-col md:flex-row justify-between gap-10">
+        <div className="max-w-xs">
+          <p className="font-headline-lg text-[20px] font-bold text-on-background">SentinelMind</p>
+          <p className="mt-2 text-[16px] md:text-[15px] leading-relaxed text-on-surface-variant">
+            An AI agent that watches other AI agents and says what went wrong while it is happening.
+          </p>
         </div>
-        <div className="flex flex-wrap gap-8">
-          <div className="flex flex-col gap-3">
-            <span className="font-label-sm text-on-surface font-bold">Product</span>
-            <a className="font-label-sm text-on-surface-variant hover:text-primary transition-colors" href="#">Features</a>
-            <a className="font-label-sm text-on-surface-variant hover:text-primary transition-colors" href="#">Security</a>
-            <a className="font-label-sm text-on-surface-variant hover:text-primary transition-colors" href="#">Enterprise</a>
+        <div className="grid grid-cols-2 gap-x-16 gap-y-1">
+          <div className="flex flex-col md:gap-3">
+            <p className="text-[16px] md:text-[15px] font-semibold text-on-background mb-1">Product</p>
+            <Link className={link} to="/dashboard">Live dashboard</Link>
+            <Link className={link} to="/graph">Failure memory</Link>
+            <a className={link} href="#features">What it catches</a>
           </div>
-          <div className="flex flex-col gap-3">
-            <span className="font-label-sm text-on-surface font-bold">Resources</span>
-            <a className="font-label-sm text-on-surface-variant hover:text-primary transition-colors" href="#">Documentation</a>
-            <a className="font-label-sm text-on-surface-variant hover:text-primary transition-colors" href="#">API Reference</a>
-            <a className="font-label-sm text-on-surface-variant hover:text-primary transition-colors" href="#">Blog</a>
-          </div>
-          <div className="flex flex-col gap-3">
-            <span className="font-label-sm text-on-surface font-bold">Company</span>
-            <a className="font-label-sm text-on-surface-variant hover:text-primary transition-colors" href="#">About Us</a>
-            <a className="font-label-sm text-on-surface-variant hover:text-primary transition-colors" href="#">Privacy Policy</a>
-            <a className="font-label-sm text-on-surface-variant hover:text-primary transition-colors" href="#">Terms of Service</a>
+          <div className="flex flex-col md:gap-3">
+            <p className="text-[16px] md:text-[15px] font-semibold text-on-background mb-1">Project</p>
+            <a className={link} href={DOCS} target="_blank" rel="noreferrer">Documentation</a>
+            <a className={link} href={ARCHITECTURE} target="_blank" rel="noreferrer">Architecture</a>
+            <a className={link} href={REPO} target="_blank" rel="noreferrer">Source on GitHub</a>
           </div>
         </div>
       </div>
-      <div className="max-w-container-max mx-auto mt-12 pt-8 border-t border-outline-variant/10 flex justify-between items-center">
-        <p className="font-label-sm text-on-surface-variant/40">Â© 2024 SentinelMind AI. All rights reserved.</p>
-        <div className="flex gap-4">
-          <span className="material-symbols-outlined text-on-surface-variant/40 hover:text-primary cursor-pointer">public</span>
-          <span className="material-symbols-outlined text-on-surface-variant/40 hover:text-primary cursor-pointer">chat_bubble</span>
-        </div>
-      </div>
+      <p className="max-w-container-max mx-auto mt-12 text-[16px] md:text-[14px] text-on-surface-variant">
+        Built by team Codecrash for FRONTIER 2026, VIT Chennai.
+      </p>
     </footer>
   );
 };

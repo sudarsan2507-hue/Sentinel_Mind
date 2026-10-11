@@ -1,36 +1,30 @@
-﻿import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
+import { REPO } from '../lib/links';
+
+const navLink = 'inline-flex min-h-11 items-center text-[15px] text-on-surface-variant hover:text-on-background transition-colors';
 
 const TopNavBar = () => {
-  const navigate = useNavigate();
   return (
-    <nav className="fixed top-0 left-0 w-full z-50 flex justify-between items-center px-margin-mobile md:px-margin-desktop py-4 bg-background/80 backdrop-blur-md border-b border-outline-variant/30">
-      <div className="flex items-center gap-8">
-        <div className="flex items-center gap-2">
-          <Link to="/">
-            <span className="font-headline-lg text-[24px] font-extrabold text-on-background tracking-tighter cursor-pointer">SentinelMind</span>
+    <nav aria-label="Main" className="fixed top-0 left-0 w-full z-50 bg-[#050505]/85 backdrop-blur-md border-b border-outline-variant/40">
+      <div className="max-w-container-max mx-auto flex justify-between items-center gap-4 px-margin-mobile md:px-margin-desktop py-2">
+        <div className="flex items-center gap-8">
+          <Link to="/" className="inline-flex min-h-11 items-center font-headline-lg text-[22px] font-extrabold text-on-background tracking-tight">
+            SentinelMind
           </Link>
+          <div className="hidden md:flex items-center gap-6">
+            <a className={navLink} href="#features">What it catches</a>
+            <a className={navLink} href="#how-it-works">How it works</a>
+            <a className={navLink} href="#results">Results</a>
+            <Link className={navLink} to="/graph">Failure memory</Link>
+            <a className={navLink} href={REPO} target="_blank" rel="noreferrer">GitHub</a>
+          </div>
         </div>
-        <div className="hidden md:flex items-center gap-6">
-          <a className="font-label-sm text-label-sm text-on-surface-variant hover:text-primary transition-colors duration-200 flex items-center gap-1" href="#">Product</a>
-          <a className="font-label-sm text-label-sm text-on-surface-variant hover:text-primary transition-colors duration-200" href="#">Resources</a>
-          <a className="font-label-sm text-label-sm text-on-surface-variant hover:text-primary transition-colors duration-200" href="#">Pricing</a>
-          <a className="font-label-sm text-label-sm text-on-surface-variant hover:text-primary transition-colors duration-200" href="#">Customers</a>
-          <Link className="font-label-sm text-label-sm text-on-surface-variant hover:text-primary transition-colors duration-200" to="/dashboard">Dashboard</Link>
-        </div>
-      </div>
-      <div className="flex items-center gap-4">
-        <button
-          onClick={() => navigate('/dashboard')}
-          className="hidden sm:block px-5 py-2 bg-surface-container-high/50 border border-outline-variant/20 rounded-full font-label-sm text-label-sm text-on-surface hover:bg-surface-variant transition-colors cursor-pointer"
+        <Link
+          to="/dashboard"
+          className="inline-flex min-h-11 items-center rounded-md bg-primary-container px-4 font-semibold text-[15px] text-[#00210a] hover:brightness-110 active:brightness-95 transition"
         >
-          Login
-        </button>
-        <button
-          onClick={() => navigate('/dashboard')}
-          className="px-5 py-2 bg-surface-container-high/50 border border-outline-variant/20 rounded-full font-label-sm text-label-sm text-on-surface hover:bg-surface-variant transition-colors cursor-pointer"
-        >
-          Sign Up
-        </button>
+          Dashboard
+        </Link>
       </div>
     </nav>
   );
