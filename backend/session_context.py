@@ -131,4 +131,27 @@ class SessionContext:
         else:
             lines.append("\nRepeat signal: this exact call has not occurred before in this window.")
 
+        calls, distinct = self.tool_frequency(event)
+        # Model calls are skipped: an agent makes one every step, so their count
+        # measures run length, not circling -- seen live, the judge called the
+        # fifth planning call a loop.
+        if calls >= 2 and event.get("step_type") != "model_call":
+            lines.append(
+                f"\nFrequency signal: {event.get('tool', '?')} has already been called "
+                f"{calls} time(s) in the last {len(steps)} step(s), with {distinct} "
+                f"distinct input(s). Many calls to one tool with varied inputs and no "
+                f"progress suggests the agent is circling (a rephrased loop)."
+            )
+
         return "\n".join(lines)
+
+    def tool_frequency(self, event: dict) -> tuple[int, int]:
+        """(prior calls to this tool, distinct inputs among them) in the window.
+
+        Catches what the repeat signal cannot: an agent rephrasing the same query
+        each time, so no two fingerprints match but it is still going in circles.
+        """
+        tool = event.get("tool", "?")
+        with self._lock:
+            prints = [s["fingerprint"] for s in self._steps if s["tool"] == tool]
+        return len(prints), len(set(prints))

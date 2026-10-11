@@ -72,3 +72,36 @@ def test_render_says_drift_is_unassessable_without_a_goal():
 
     assert "not declared" in rendered
     assert "first step" in rendered
+
+
+def test_frequency_signal_catches_a_rephrased_loop():
+    """No two inputs match, so the repeat signal stays silent -- but six calls
+    to one tool is still circling. Seen live: the real agent rephrased its
+    search_docs query every time and every step was judged OK."""
+    ctx = SessionContext(goal="refund order ord_5512")
+    for i, q in enumerate(["refund policy", "refund api", "how to refund"]):
+        ctx.record(_call("search_docs", [q], eid=f"e{i}"), {"status": "OK"})
+    ctx.record(_call("get_order", ["ord_5512"]), {"status": "OK"})
+
+    nxt = _call("search_docs", ["refund endpoint docs"])
+    assert ctx.repeat_count(nxt) == 0
+    assert ctx.tool_frequency(nxt) == (3, 3)
+    rendered = ctx.render(nxt)
+    assert "Frequency signal: search_docs has already been called 3 time(s)" in rendered
+    assert "3 distinct input(s)" in rendered
+
+
+def test_frequency_signal_is_absent_for_a_tool_seen_at_most_once():
+    ctx = SessionContext(goal="g")
+    ctx.record(_call("search_docs", ["a"]), {"status": "OK"})
+    assert "Frequency signal" not in ctx.render(_call("search_docs", ["b"]))
+    assert ctx.tool_frequency(_call("get_order", ["x"])) == (0, 0)
+
+
+def test_frequency_signal_skips_model_calls():
+    """The agent plans with a model call every step; counting them is noise."""
+    ctx = SessionContext(goal="g")
+    llm = {**_call("agent_llm_call", ["messages"]), "step_type": "model_call"}
+    for i in range(4):
+        ctx.record({**llm, "input": {"args": [i], "kwargs": {}}}, {"status": "OK"})
+    assert "Frequency signal" not in ctx.render(llm)
