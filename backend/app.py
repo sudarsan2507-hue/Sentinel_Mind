@@ -60,6 +60,11 @@ KNOWN_TOOLS = [
     # real agent
     "get_order",
     "agent_llm_call",
+    # The agent's own name for its HTTP tool. Each call is traced as
+    # internal_api:<endpoint>, so invented endpoints are still unregistered --
+    # but the model_call that *chooses* this tool mentions it by name, and
+    # leaving it out made every such planning step read as a hallucination.
+    "call_internal_api",
     "internal_api:/v1/orders/list",
     "internal_api:/v1/customers/search",
 ]
