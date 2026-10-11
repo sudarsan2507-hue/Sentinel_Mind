@@ -52,9 +52,10 @@ function lessonHeadline(text) {
 }
 
 const COLORS = {
-  failure_mode: { fill: '#2a1416', stroke: '#f87171' },
-  tool: { fill: '#121815', stroke: '#4a7a5a' },
-  capability: { fill: '#241c0d', stroke: '#e0a43a' },
+  failure_mode: { fill: '#2a1416', stroke: '#f87171', label: 'Failure' },
+  tool: { fill: '#10201a', stroke: '#34d27a', label: 'Tool' },
+  invented: { fill: '#1d1830', stroke: '#a78bfa', label: 'Invented tool' },
+  capability: { fill: '#2a2008', stroke: '#f5b041', label: 'Missing capability' },
 };
 const key = (n) => `${n.type}:${n.id}`;
 
@@ -131,6 +132,11 @@ function computeLayout(nodes, edges, W, H) {
 function MemoryGraph({ nodes, edges, focus, onFocus }) {
   const [box, W0] = useWidth();
   const [hover, setHover] = useState(null);
+  // Nodes can be dragged. Moved positions are tied to the canvas size they were
+  // made at, so a resize falls back to the computed layout instead of leaving
+  // nodes stranded off-canvas.
+  const [moved, setMoved] = useState({ size: '', at: {} });
+  const [drag, setDrag] = useState(null);
   const W = Math.max(320, W0 || 900);
   const H = W < 640 ? Math.round(W * 1.1) : Math.max(520, Math.min(680, Math.round(W * 0.56)));
   const narrow = W < 640;
@@ -138,7 +144,48 @@ function MemoryGraph({ nodes, edges, focus, onFocus }) {
   // Goals are context, not structure -- they appear in the card, not as nodes.
   const shown = useMemo(() => nodes.filter((n) => n.type !== 'goal'), [nodes]);
   const links = useMemo(() => edges.filter((e) => e.relation !== 'missing_in'), [edges]);
-  const { pos, cx, cy } = useMemo(() => computeLayout(shown, links, W, H), [shown, links, W, H]);
+  const { pos, cx: cx0, cy: cy0 } = useMemo(() => computeLayout(shown, links, W, H), [shown, links, W, H]);
+  const size = `${W}x${H}`;
+  const at = moved.size === size ? moved.at : {};
+  const hasMoves = Object.keys(at).length > 0;
+  const cx = at.agent ? at.agent.x : cx0;
+  const cy = at.agent ? at.agent.y : cy0;
+  // Where a node is now: dragged position if any, else the layout. Labels keep
+  // pointing away from the agent, wherever either has been moved to.
+  const P = (k) => {
+    const m = at[k];
+    if (m) return { x: m.x, y: m.y, a: Math.atan2(m.y - cy, m.x - cx) };
+    const b = pos.get(k);
+    return b ? { ...b, a: at.agent ? Math.atan2(b.y - cy, b.x - cx) : b.a } : null;
+  };
+
+  const startDrag = (k, e) => {
+    const p0 = k === 'agent' ? { x: cx, y: cy } : P(k);
+    setDrag({ k, x0: e.clientX, y0: e.clientY, px: p0.x, py: p0.y, moved: false });
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+  const moveDrag = (k, e) => {
+    const d = drag;
+    if (!d || d.k !== k) return;
+    const dx = e.clientX - d.x0; const dy = e.clientY - d.y0;
+    if (!d.moved && Math.hypot(dx, dy) < 4) return; // a click, not a drag
+    if (!d.moved) setDrag({ ...d, moved: true });
+    const x = Math.min(W - 10, Math.max(10, d.px + dx));
+    const y = Math.min(H - 10, Math.max(10, d.py + dy));
+    setMoved((m) => ({ size, at: { ...(m.size === size ? m.at : {}), [k]: { x, y } } }));
+  };
+  const endDrag = (k) => {
+    const d = drag;
+    setDrag(null);
+    if (d && !d.moved && k !== 'agent') onFocus(k);
+  };
+  const dragProps = (k) => ({
+    onPointerDown: (e) => startDrag(k, e),
+    onPointerMove: (e) => moveDrag(k, e),
+    onPointerUp: () => endDrag(k),
+    onPointerCancel: () => setDrag(null),
+    style: { touchAction: 'none' },
+  });
   const invented = useMemo(() => new Set(links.filter((e) => e.relation === 'requires').map((e) => e.src_id)), [links]);
 
   // The lit neighbourhood: whatever is hovered, else whatever is selected.
@@ -161,6 +208,15 @@ function MemoryGraph({ nodes, edges, focus, onFocus }) {
 
   return (
     <div ref={box} className="relative w-full">
+      {hasMoves && (
+        <button
+          type="button"
+          onClick={() => setMoved({ size: '', at: {} })}
+          className="absolute right-4 top-2 z-10 inline-flex min-h-11 md:min-h-9 items-center rounded-md border border-outline-variant/60 bg-surface-container-low px-3 text-[13px] text-on-background hover:bg-surface-container-high"
+        >
+          Reset layout
+        </button>
+      )}
       <svg width={W} height={H} className="block" role="img" aria-label={`Failure memory: ${shown.filter((n) => n.type === 'failure_mode').length} kinds of failure across ${shown.filter((n) => n.type === 'tool').length} tools`}>
         <defs>
           <radialGradient id="kg-core" cx="50%" cy="50%" r="50%">
@@ -173,19 +229,22 @@ function MemoryGraph({ nodes, edges, focus, onFocus }) {
           <ellipse key={f} cx={cx} cy={cy} rx={(W / 2 - margin(narrow)) * f} ry={(H / 2 - 40) * f} fill="none" stroke="#ffffff0d" strokeDasharray="2 6" />
         ))}
         {/* the agent at the centre, with spokes to each way it failed */}
-        <circle cx={cx} cy={cy} r="46" fill="url(#kg-core)" />
+        <circle cx={cx} cy={cy} r="46" fill="url(#kg-core)" pointerEvents="none" />
         {shown.filter((n) => n.type === 'failure_mode').map((f) => {
-          const p = pos.get(key(f));
+          const p = P(key(f));
           const on = !lit || lit.has(key(f));
           return <line key={`spoke-${f.id}`} x1={cx} y1={cy} x2={p.x} y2={p.y} stroke="#f87171" strokeOpacity={on ? 0.35 : 0.06} strokeWidth="1" className="kg-edge" />;
         })}
-        <circle cx={cx} cy={cy} r="15" fill="#0b120d" stroke="#00ff66" strokeWidth="1.5" />
-        <text x={cx} y={cy + 32} textAnchor="middle" className="fill-on-surface-variant" style={{ font: '12px Inter, sans-serif' }}>the agent</text>
+        <g className="cursor-grab active:cursor-grabbing" {...dragProps('agent')}>
+          <circle cx={cx} cy={cy} r="22" fill="transparent" />
+          <circle cx={cx} cy={cy} r="15" fill="#0b120d" stroke="#00ff66" strokeWidth="1.5" />
+          <text x={cx} y={cy + 32} textAnchor="middle" className="fill-on-surface-variant" style={{ font: '12px Inter, sans-serif' }}>the agent</text>
+        </g>
 
         {/* links, curved toward the centre */}
         {links.map((e, i) => {
-          const a = pos.get(`${e.src_type}:${e.src_id}`);
-          const b = pos.get(`${e.dst_type}:${e.dst_id}`);
+          const a = P(`${e.src_type}:${e.src_id}`);
+          const b = P(`${e.dst_type}:${e.dst_id}`);
           if (!a || !b) return null;
           const mx = (a.x + b.x) / 2 * 0.8 + cx * 0.2;
           const my = (a.y + b.y) / 2 * 0.8 + cy * 0.2;
@@ -206,13 +265,13 @@ function MemoryGraph({ nodes, edges, focus, onFocus }) {
 
         {/* nodes */}
         {shown.map((n, i) => {
-          const p = pos.get(key(n));
-          if (!p) return null;
           const k = key(n);
+          const p = P(k);
+          if (!p) return null;
           const on = !lit || lit.has(k);
           const sel = focus === k;
           const r = radius(n);
-          const c = COLORS[n.type];
+          const c = COLORS[n.type === 'tool' && invented.has(n.id) ? 'invented' : n.type];
           const showLabel = !narrow || n.type === 'failure_mode' || k === active;
           // Labels point away from the centre. Tool names run radially, like
           // spokes, so neighbours on the ring can never overlap; the few
@@ -233,12 +292,12 @@ function MemoryGraph({ nodes, edges, focus, onFocus }) {
           return (
             <g
               key={k}
-              className="kg-node cursor-pointer"
-              style={{ animationDelay: `${n.type === 'failure_mode' ? 0 : n.type === 'tool' ? 150 + i * 18 : 400 + i * 18}ms`, transformOrigin: `${p.x}px ${p.y}px` }}
+              className="kg-node cursor-grab active:cursor-grabbing"
+              {...dragProps(k)}
+              style={{ touchAction: 'none', animationDelay: `${n.type === 'failure_mode' ? 0 : n.type === 'tool' ? 150 + i * 18 : 400 + i * 18}ms`, transformOrigin: `${p.x}px ${p.y}px` }}
               opacity={on ? 1 : 0.15}
               onMouseEnter={() => setHover(k)}
               onMouseLeave={() => setHover(null)}
-              onClick={() => onFocus(k)}
               role="button"
               tabIndex={0}
               aria-label={`${n.type.replace('_', ' ')} ${raw}, seen ${n.count} times`}
@@ -246,17 +305,12 @@ function MemoryGraph({ nodes, edges, focus, onFocus }) {
             >
               <circle cx={p.x} cy={p.y} r={Math.max(r, 14)} fill="transparent" />
               {sel && n.type === 'failure_mode' && <circle cx={p.x} cy={p.y} r={r + 8} fill="none" stroke="#f87171" strokeOpacity="0.5" className="kg-pulse" style={{ transformOrigin: `${p.x}px ${p.y}px` }} />}
-              {n.type === 'capability' ? (
-                <rect x={p.x - r} y={p.y - r} width={r * 2} height={r * 2} rx="3" transform={`rotate(45 ${p.x} ${p.y})`} fill={c.fill} stroke={c.stroke} strokeWidth="1.5" />
-              ) : (
-                <circle
-                  cx={p.x} cy={p.y} r={r}
-                  fill={c.fill}
-                  stroke={sel ? '#ffffff' : c.stroke}
-                  strokeWidth={n.type === 'failure_mode' ? 2 : 1.5}
-                  strokeDasharray={n.type === 'tool' && invented.has(n.id) ? '3 2.5' : undefined}
-                />
-              )}
+              <circle
+                cx={p.x} cy={p.y} r={r}
+                fill={c.fill}
+                stroke={sel ? '#ffffff' : c.stroke}
+                strokeWidth={n.type === 'failure_mode' ? 2 : 2}
+              />
               {n.type === 'failure_mode' && (
                 <text x={p.x} y={p.y + 5} textAnchor="middle" className="fill-on-background" style={{ font: '700 14px Inter, sans-serif' }}>{n.count}</text>
               )}
@@ -464,8 +518,6 @@ export default function KnowledgeGraphPage() {
   const runs = data?.summary?.runs ?? 0;
   const failures = useMemo(() => nodes.filter((n) => n.type === 'failure_mode').sort((a, b) => b.count - a.count), [nodes]);
   const totalFailures = failures.reduce((s, f) => s + f.count, 0);
-  const toolCount = nodes.filter((n) => n.type === 'tool').length;
-  const capCount = nodes.filter((n) => n.type === 'capability').length;
   // Never open on nothing selected: default to the most frequent failure.
   const focusKey = picked && nodes.some((n) => key(n) === picked) ? picked : (failures[0] ? key(failures[0]) : null);
 
@@ -501,20 +553,12 @@ export default function KnowledgeGraphPage() {
       </header>
 
       <main className="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-6 md:py-8 flex flex-col gap-5">
-        <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-3">
-          <div>
-            <h1 className="font-headline-lg text-[28px] md:text-[34px] font-bold leading-tight text-on-background">Failure memory</h1>
-            <p className="mt-1 text-[16px] text-on-surface-variant">Everything this agent has got wrong, and what it is told because of it.</p>
-          </div>
-          <dl className="flex gap-6 md:gap-8">
-            {[[totalFailures, 'failures'], [toolCount, 'tools'], [capCount, 'missing capabilities'], [runs, 'runs']].map(([v, l]) => (
-              <div key={l}>
-                <dt className="sr-only">{l}</dt>
-                <dd className="font-headline-lg text-[24px] font-bold tabular-nums leading-none text-on-background">{v}</dd>
-                <dd className="mt-1 text-[13px] text-on-surface-variant">{l}</dd>
-              </div>
-            ))}
-          </dl>
+        <div>
+          <h1 className="font-headline-lg text-[28px] md:text-[34px] font-bold leading-tight text-on-background">How this agent fails, and why</h1>
+          <p className="mt-2 max-w-[780px] text-[16px] leading-relaxed text-on-surface-variant">
+            Every warning and anomaly is remembered here across {runs} run{runs === 1 ? '' : 's'}. Pick a failure
+            to see the tools behind it and what the agent is told because of it. Drag the graph around to explore.
+          </p>
         </div>
 
         {loading ? (
@@ -528,10 +572,13 @@ export default function KnowledgeGraphPage() {
           </div>
         ) : (
           <>
-            {/* Failure chips: the keyboard- and screen-reader-friendly way into the graph */}
-            <div role="tablist" aria-label="Failure modes" className="flex flex-wrap gap-2">
+            {/* Failure tiles: count, share and spread at a glance -- and the
+                keyboard / screen-reader way into the graph. */}
+            <div role="tablist" aria-label="Failure modes" className="grid grid-cols-2 md:grid-cols-5 gap-3">
               {failures.map((f) => {
                 const active = focusKey === key(f);
+                const share = totalFailures ? Math.round((f.count / totalFailures) * 100) : 0;
+                const tools = edges.filter((e) => e.relation === 'exhibits' && e.dst_id === f.id).length;
                 return (
                   <button
                     key={f.id}
@@ -539,12 +586,18 @@ export default function KnowledgeGraphPage() {
                     role="tab"
                     aria-selected={active}
                     onClick={() => setPicked(key(f))}
-                    className={`inline-flex min-h-11 items-center gap-2 rounded-full border px-4 text-[14px] transition-colors ${
-                      active ? 'border-error/70 bg-error/10 text-on-background' : 'border-outline-variant/50 text-on-surface-variant hover:text-on-background hover:border-outline-variant'
+                    className={`kpi-tile text-left rounded-xl border p-4 transition-colors ${
+                      active ? 'border-error/60 bg-error/[0.08]' : 'border-outline-variant/40 bg-surface-container-low hover:border-outline-variant'
                     }`}
                   >
-                    {FAILURE[f.id]?.title ?? f.id}
-                    <span className="tabular-nums text-on-surface-variant">{f.count}</span>
+                    <span className="block text-[15px] text-on-background">{FAILURE[f.id]?.title ?? f.id}</span>
+                    <span className="mt-2 block font-headline-lg text-[28px] font-bold leading-none tabular-nums text-on-background">{f.count}</span>
+                    <span className="mt-2 block text-[13px] text-on-surface-variant">
+                      {share}% of failures · {tools} tool{tools === 1 ? '' : 's'}
+                    </span>
+                    <span className="mt-3 block h-1.5 rounded-full bg-outline-variant/30 overflow-hidden">
+                      <span className="block h-full rounded-full bg-error/80 bar-grow-x" style={{ width: `${share}%` }} />
+                    </span>
                   </button>
                 );
               })}
@@ -552,11 +605,13 @@ export default function KnowledgeGraphPage() {
 
             <section className="rounded-xl border border-outline-variant/40 bg-surface-container-low overflow-hidden">
                 <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-5 pt-4 text-[13px] text-on-surface-variant">
-                  <span className="inline-flex items-center gap-1.5"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="5" fill="#2a1416" stroke="#f87171" strokeWidth="1.5" /></svg>Failure</span>
-                  <span className="inline-flex items-center gap-1.5"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4.5" fill="#121815" stroke="#4a7a5a" strokeWidth="1.5" /></svg>Tool</span>
-                  <span className="inline-flex items-center gap-1.5"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4.5" fill="#121815" stroke="#4a7a5a" strokeWidth="1.5" strokeDasharray="2.5 2" /></svg>Invented tool</span>
-                  <span className="inline-flex items-center gap-1.5"><svg width="12" height="12" aria-hidden="true"><rect x="2.5" y="2.5" width="7" height="7" transform="rotate(45 6 6)" fill="#241c0d" stroke="#e0a43a" strokeWidth="1.5" /></svg>Missing capability</span>
-                  <span className="ml-auto hidden md:inline">Hover to trace a chain · click to inspect</span>
+                  {Object.values(COLORS).map((c) => (
+                    <span key={c.label} className="inline-flex items-center gap-1.5">
+                      <svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="5" fill={c.fill} stroke={c.stroke} strokeWidth="2" /></svg>
+                      {c.label}
+                    </span>
+                  ))}
+                  <span className="ml-auto hidden md:inline">Drag to move · hover to trace · click to inspect</span>
                 </div>
                 <MemoryGraph nodes={nodes} edges={edges} focus={focusKey} onFocus={setPicked} />
             </section>

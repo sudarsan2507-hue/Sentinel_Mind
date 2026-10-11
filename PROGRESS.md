@@ -545,3 +545,9 @@ draws once session + verdicts are in, instead of drawing empty and reflowing).
   · 6 attempts") that expand to the exact wording. Phones get wider rings and labels on tap.
 - Plain SVG: vis-network removed entirely (−169 KB gzipped). Graph page 7.7 KB gzipped.
   Lighthouse: desktop 97, mobile 92, accessibility 100.
+- **Follow-up:** every graph node is now a circle, told apart by colour (red failure, green tool,
+  violet invented tool, amber missing capability — named in the legend, card and screen-reader
+  labels). Nodes and the agent can be dragged; links follow, a plain click still selects, and
+  "Reset layout" restores the computed arrangement. The page top went back to the earlier
+  "How this agent fails, and why" heading with the five failure tiles and share bars, above the
+  round graph.
