@@ -317,6 +317,19 @@ makes a swap a one-line env change, and the `json_schema` → `json_object` down
 with weaker structured-output support still works. If Groq is down entirely, `--replay` is the
 answer — do not try to re-plumb a provider on demo morning.
 
+**That risk landed (2026-10).** Groq retired the Llama models (404). Defaults are now
+`openai/gpt-oss-120b` (judge) and `openai/gpt-oss-20b` (real agent). gpt-oss is a reasoning
+model: the judge sends `reasoning_effort="medium"` (`SENTINEL_REASONING_EFFORT`) with
+`max_tokens=1536`, because hidden reasoning counts against the cap. Measured on the eval set:
+low 7/9 (~0.8s, over-calls WARN as ANOMALY), default ran out of tokens and degraded, medium 9/9
+on three runs (p95 1.5–2.0s). The 8000 TPM limit caps live judging at roughly 5 verdicts/min,
+so a 20-step real-agent run takes ~2 minutes to fully judge.
+
+**Cross-step signals the judge is given as facts:** exact-repeat count (sha256 of tool+input)
+and, since 2026-10, per-tool frequency (calls of this tool in the window, distinct inputs).
+The second exists because a live run showed the real agent circling `search_docs` six times
+with a rephrased query each time — no fingerprints matched, so every step was judged OK.
+
 **Known pitch gap:** *"LangSmith logs. SentinelMind intervenes."* — with auto-correction out of
 scope, we detect and explain rather than act. Be ready for that question; the honest answer is that
 real-time detection + explanation *is* the intervention enabler, and injection is the next step.

@@ -49,8 +49,8 @@ decisions) · [PROGRESS](PROGRESS.md) (what is verified) · [DEMO](DEMO.md) (run
 
 | Role | Model | Why |
 |---|---|---|
-| **Meta-agent** (the judge) | `llama-3.3-70b-versatile` | Judgement quality. Overridable via `SENTINEL_MODEL`. |
-| **Monitored agent** (the subject) | `llama-3.1-8b-instant` | Weak *on purpose* — see §7. |
+| **Meta-agent** (the judge) | `openai/gpt-oss-120b`, `reasoning_effort=medium` | Judgement quality. Overridable via `SENTINEL_MODEL`. |
+| **Monitored agent** (the subject) | `openai/gpt-oss-20b` | The smaller model *on purpose* — see §7. |
 
 Both on Groq, chosen for LPU inference speed: the product claim is a sub-second
 verdict, and a verdict is a short classification rather than a reasoning problem.
@@ -308,7 +308,7 @@ own system prompt.
 | | `demo_agent.py` | `real_agent.py` |
 |---|---|---|
 | Nature | Scripted mock | Real tool-calling agent |
-| Model | none | `llama-3.1-8b-instant` |
+| Model | none | `openai/gpt-oss-20b` |
 | Failures | Planted, deterministic | Genuine, different every run |
 | Use | On stage — failures on cue | Proving the tool works |
 
@@ -379,8 +379,9 @@ relabelling until the model agrees is how an eval stops meaning anything.
 | Variable | Default | Effect |
 |---|---|---|
 | `GROQ_API_KEY` | — | **Required.** Free at console.groq.com |
-| `SENTINEL_MODEL` | `llama-3.3-70b-versatile` | Judge model |
-| `SENTINEL_AGENT_MODEL` | `llama-3.1-8b-instant` | Subject model |
+| `SENTINEL_MODEL` | `openai/gpt-oss-120b` | Judge model |
+| `SENTINEL_REASONING_EFFORT` | `medium` | gpt-oss reasoning effort (`default` sends none) |
+| `SENTINEL_AGENT_MODEL` | `openai/gpt-oss-20b` | Subject model |
 | `SENTINEL_CONTEXT_WINDOW` | `8` | Steps retained for loop/drift detection |
 | `SENTINEL_CONFIDENCE_THRESHOLD` | `0.0` | ANOMALY below this → WARN |
 | `PORT` | `5000` | Server port |
