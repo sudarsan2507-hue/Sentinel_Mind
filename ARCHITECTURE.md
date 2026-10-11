@@ -5,7 +5,7 @@ What every piece is, what it does, and **why it works the way it does**. The
 you know the failure they prevent.
 
 Companion docs: [README](README.md) (what it is) · [PLAN](PLAN.md) (design
-decisions) · [PROGRESS](PROGRESS.md) (what is verified) · [DEMO](DEMO.md) (runbook).
+decisions) · [PROGRESS](PROGRESS.md) (what is verified).
 
 ---
 

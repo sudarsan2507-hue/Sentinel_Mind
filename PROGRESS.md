@@ -551,3 +551,9 @@ draws once session + verdicts are in, instead of drawing empty and reflowing).
   "Reset layout" restores the computed arrangement. The page top went back to the earlier
   "How this agent fails, and why" heading with the five failure tiles and share bars, above the
   round graph.
+
+### 2026-10-12 — no more pitch material
+
+SentinelMind is a standalone project now, not a hackathon entry. Removed `PITCH.md`,
+`docs/Presentation pitch.md`, `DEMO.md` (the recording runbook and spoken script) and the
+FRONTIER slide deck. Running and demoing it is covered by the README.
