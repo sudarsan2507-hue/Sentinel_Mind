@@ -1,29 +1,31 @@
-﻿
+import { Link } from 'react-router-dom';
+
 const VisualCTA = () => {
   return (
-    <section className="py-24 px-margin-mobile md:px-margin-desktop max-w-container-max mx-auto overflow-hidden">
-      <div className="relative bg-surface-container-low rounded-3xl p-12 border border-outline-variant/20 overflow-hidden flex flex-col md:flex-row items-center gap-12 transition-all duration-700 opacity-100 translate-y-0">
-        <div className="relative z-10 flex-1">
-          <h3 className="font-headline-lg text-on-background mb-6">Ready to scale your <br /> AI agents?</h3>
-          <p className="font-body-md text-on-surface-variant mb-8 max-w-md">Join 500+ enterprises monitoring their autonomous workflows with SentinelMind. Integration takes 2 lines of code.</p>
-          <div className="flex gap-4">
-            <button className="px-8 py-3 bg-primary text-on-primary font-bold rounded-lg transition-all hover:bg-primary-container">Start Free Trial</button>
-            <button className="px-8 py-3 border border-outline-variant font-bold rounded-lg hover:bg-surface-variant transition-all">Book Demo</button>
-          </div>
+    <section className="px-margin-mobile md:px-margin-desktop py-16 md:py-24 border-t border-outline-variant/40">
+      <div className="max-w-container-max mx-auto flex flex-col md:flex-row md:items-end md:justify-between gap-8">
+        <div className="max-w-[36rem]">
+          <h2 className="font-headline-lg text-[32px] md:text-[40px] leading-tight font-semibold text-on-background">
+            Watch it judge a real agent.
+          </h2>
+          <p className="mt-3 text-[17px] leading-relaxed text-on-surface-variant">
+            Start the server, run <code className="font-label-sm text-[15px] text-on-background">python backend/real_agent.py</code>,
+            and the dashboard fills in as each step is judged.
+          </p>
         </div>
-        <div className="flex-1 relative h-64 md:h-80 w-full">
-          <div className="absolute inset-0 bg-gradient-to-br from-primary-container/20 to-transparent rounded-2xl border border-outline-variant/10 flex items-center justify-center p-4">
-            <div className="grid grid-cols-8 gap-2 w-full h-full opacity-40">
-              <div className="bg-primary-container h-full rounded-t-lg mt-auto" style={{ height: '40%' }}></div>
-              <div className="bg-primary-container h-full rounded-t-lg mt-auto" style={{ height: '60%' }}></div>
-              <div className="bg-primary-container h-full rounded-t-lg mt-auto" style={{ height: '35%' }}></div>
-              <div className="bg-primary-container h-full rounded-t-lg mt-auto" style={{ height: '80%' }}></div>
-              <div className="bg-primary-container h-full rounded-t-lg mt-auto" style={{ height: '45%' }}></div>
-              <div className="bg-primary-container h-full rounded-t-lg mt-auto" style={{ height: '95%' }}></div>
-              <div className="bg-primary-container h-full rounded-t-lg mt-auto" style={{ height: '55%' }}></div>
-              <div className="bg-primary-container h-full rounded-t-lg mt-auto" style={{ height: '70%' }}></div>
-            </div>
-          </div>
+        <div className="flex flex-col sm:flex-row gap-3">
+          <Link
+            to="/dashboard"
+            className="inline-flex min-h-12 items-center justify-center rounded-md bg-primary-container px-6 font-semibold text-[16px] text-[#00210a] hover:brightness-110 active:brightness-95 transition"
+          >
+            Open the live dashboard
+          </Link>
+          <Link
+            to="/graph"
+            className="inline-flex min-h-12 items-center justify-center rounded-md border border-outline-variant px-6 font-semibold text-[16px] text-on-background hover:border-on-surface-variant active:bg-surface-container-low transition"
+          >
+            See the failure memory
+          </Link>
         </div>
       </div>
     </section>
