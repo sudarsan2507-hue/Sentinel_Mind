@@ -45,18 +45,24 @@ Every verdict carries a plain-English explanation and a confidence score.
 
 | Metric | Result |
 |---|---|
-| Verdict latency | **p50 0.62s · p95 1.43s** (p95 = slowest of 9; cold start 2.27s, excluded) |
-| Accuracy on the labelled eval set | **8 / 9** on this run |
-| Test suite | **132 passing**, offline, no API key required |
+| Verdict latency | **p50 0.76–1.00s · p95 1.53–2.04s** (p95 = slowest of 9) |
+| Accuracy on the labelled eval set | **9 / 9** on each of three runs |
+| Test suite | **174 passing**, offline, no API key required |
 
-Measured 2026-07-30 against `llama-3.3-70b-versatile`, after the prompt repair and the percentile
-fix. Full artifact in [`evals/results/`](evals/results/) — re-plottable without re-running.
+Measured 2026-10-11 against `openai/gpt-oss-120b` at `reasoning_effort="medium"` (Groq retired the
+Llama models). Earlier, on `llama-3.3-70b-versatile` (2026-07-30): 8/9, p95 1.43s. Full artifacts
+in [`evals/results/`](evals/results/) — re-plottable without re-running.
+
+Reasoning effort was chosen by measurement, not taste: `low` was fastest (~0.8s) but scored 7/9
+(two WARN cases over-called as ANOMALY); the provider default was slowest and twice ran out of
+tokens mid-thought, returning no verdict at all. Three runs is still a small sample.
 
 > The one miss was `output_drifts_from_goal`: expected `WARN`, returned `ANOMALY` for a summary
 > that wandered off the session goal. That is a severity disagreement on a genuinely borderline
 > case, not a missed detection — and it is the *safe* direction to err. Accuracy has ranged 8–9/9
 > across runs at `temperature=0`, because LLM inference is not deterministic even when sampling is.
-> Quote it as **"8 of 9 on our labelled set"**, never as "89% accurate".
+> Quote it as **"9 of 9 on our labelled set"** (or 8 of 9 for the Llama-era run), never as a
+> percentage — nine cases is a demonstration, not a statistic.
 
 Reproduce both yourself:
 
@@ -188,7 +194,7 @@ half a run and looking like it worked.
 ### Watching a real agent, and learning from it
 
 `demo_agent.py` is scripted — reliable for a stage demo, but its failures are written in advance.
-`real_agent.py` is not: it runs its own model (`llama-3.1-8b-instant`, weak on purpose), gets a task
+`real_agent.py` is not: it runs its own model (`openai/gpt-oss-20b`, the smaller one, on purpose), gets a task
 it cannot complete with the read-only tools it has, and decides for itself what to do. The loops,
 the drift, and the invented endpoints are whatever the model actually does.
 
@@ -288,7 +294,9 @@ Verdicts stream to connected dashboards over WebSocket as `verdict` events.
 | Variable | Default | Purpose |
 |---|---|---|
 | `GROQ_API_KEY` | — | **Required.** Free at console.groq.com |
-| `SENTINEL_MODEL` | `llama-3.3-70b-versatile` | Groq's lineup changes — verify against the live list |
+| `SENTINEL_MODEL` | `openai/gpt-oss-120b` | Groq's lineup changes — verify against the live list |
+| `SENTINEL_AGENT_MODEL` | `openai/gpt-oss-20b` | The monitored real agent's model |
+| `SENTINEL_REASONING_EFFORT` | `medium` | gpt-oss only: `low`, `medium`, `high`, or `default` (send nothing) |
 | `SENTINEL_CONTEXT_WINDOW` | `8` | Steps retained for loop and drift detection |
 | `SENTINEL_CONFIDENCE_THRESHOLD` | `0.0` | ANOMALY verdicts below this are downgraded to WARN |
 
@@ -320,7 +328,10 @@ dropped connections. It is permanent for the life of the process, so downgrading
 reason costs strict enforcement for the whole run with nothing to show for it: loose mode works
 fine, so the weaker guarantee is invisible. `GET /health` reports which mode is actually in force.
 
-> **In practice `llama-3.3-70b-versatile` rejects strict `json_schema`, so we run in
+> **`openai/gpt-oss-120b` accepts strict `json_schema`** — `/health` reports
+> `"structured_output": "json_schema"` (verified 2026-10-11). The history below is from the
+> Llama era, kept because the fallback still matters for other models.
+> **`llama-3.3-70b-versatile` rejected strict `json_schema`, so it ran in
 > `json_object` mode.** Verified 2026-07-30: `/health` reports `"structured_output":
 > "json_object"` after the first call. The fallback is doing real work rather than sitting
 > unused — every verdict in the numbers above was parsed from loose JSON mode without a single

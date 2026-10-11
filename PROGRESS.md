@@ -385,3 +385,123 @@ python evals/run_learning_experiment.py --runs 3 --pause 45 --settle 12
 Needs a reset quota (rolling daily window) or a paid Groq tier. Budget roughly 25–30k tokens
 for a 3+3 run experiment. If the result comes back flat or worse, say so — the harness is
 built to report that honestly.
+
+### 2026-10-11 — real-agent end-to-end, judge tuning, UI fixes
+
+Ran `real_agent.py` (gpt-oss-20b) against the live server with a headless browser on the
+dashboard and graph pages (Playwright; browsers, caches and logs on E:, nothing on C:).
+
+#### What the first live run exposed (20 steps: 15 OK / 1 WARN / 4 ANOMALY)
+
+- **Missed loop.** The agent called `search_docs` six times with a *reworded* query each time.
+  No fingerprints matched, so the repeat signal stayed silent and every step was judged OK.
+  Fixed: `SessionContext.tool_frequency()` — a second deterministic fact (calls of this tool in
+  the window, distinct inputs) rendered into the judge's context, plus prompt guidance (3+ = WARN,
+  5+ = ANOMALY). Model-call steps are excluded: the agent plans with one every step, and the
+  first version had the judge calling the fifth planning call a loop.
+- **False positive.** Planning steps that chose `call_internal_api` were flagged as hallucinated
+  tools — the agent's own HTTP-tool name was not registered. Added to `KNOWN_TOOLS`; invented
+  endpoints are still traced as `internal_api:<endpoint>` and still unregistered.
+- **Latency misjudged.** "Over ~2 seconds is slow" was being applied to model calls. Prompt now
+  scopes it to tool calls.
+- **Bad lesson learned.** The knowledge graph had distilled "call `agent_llm_call` once" from the
+  loop verdicts above. `classify_failure` no longer files model-call steps as loops; the loop
+  lesson now covers reworded loops. (The stale lesson remains in local `knowledge/` until
+  Clear Memory — its count stopped growing after the fix.)
+- **Agent died on one bad generation.** Groq rejects unparseable tool-call JSON
+  (`tool_use_failed`); the agent broke out of its loop at step 3. It now feeds the error back
+  and retries, at most twice in a row.
+
+#### Judge: reasoning effort, measured
+
+| `reasoning_effort` | Eval | p95 | Note |
+|---|---|---|---|
+| provider default | — | 5.8s (Sept) | twice ran out of `max_tokens=512` mid-reasoning → no verdict |
+| low | 7/9 | 1.08s | over-called two WARN cases as ANOMALY |
+| **medium** (now default) | **9/9 ×3** | 1.53–2.04s | `max_tokens` raised to 1536 |
+
+Configurable via `SENTINEL_REASONING_EFFORT`. Nine cases, three runs — a demonstration, not a
+statistic. Live judging is throughput-bound by the 8000 TPM limit: a 20-step run takes ~2 min
+to fully judge, and per-verdict latency climbs from ~1s to 10–20s mid-run as the queue waits.
+
+#### UI
+
+- vis-network is **bundled** (lazy chunk), not fetched from unpkg — the trace graph no longer
+  depends on venue wifi. Only Google Fonts load externally now.
+- **Fixed a race:** nodes that arrived before vis finished loading were dropped, so after any
+  page reload the dashboard showed "20 NODES" over an empty canvas. Pre-existing, also with the CDN.
+- Trace graph no longer shrinks a long run to unreadable dashes: it fits while legible, then
+  holds a readable zoom and follows the newest step.
+- Knowledge Graph page now has a **visual graph** (tools, failure modes, capabilities, goals;
+  click a node to inspect) above the cards.
+- Repaired double-encoded UTF-8 across 15 frontend files — visible on screen as `â€”`, `â€¦`,
+  `8â€“9 / 9`. Footer claimed "Meta-agent: Claude Sonnet 5"; it now reads the live model from `/health`.
+
+#### Final E2E (all fixes in)
+
+20 steps traced, 20 judged, **0 degraded**, 12 OK / 5 WARN / 3 ANOMALY: all three invented
+endpoints ANOMALY, rephrased `search_docs` circling WARN, no model-call false positives.
+First node on screen 6s after agent start; 0 console errors; graph page renders and node
+selection works. Tests: **167 passing**.
+
+**Not committed.** Awaiting the go-ahead.
+
+### 2026-10-11 — every button has a purpose; knowledge graph rebuilt around reasoning
+
+- **Dead controls removed or wired.** The landing page had Login, Sign Up, Get Started, Start
+  Free Trial, Book Demo and 12 `href="#"` links — no auth, pricing or blog exists. Every control
+  now goes somewhere real: dashboard, knowledge graph, in-page sections (`#features`,
+  `#how-it-works`), or the README / ARCHITECTURE on GitHub (`src/lib/links.js`). Removed copy
+  that was not true: "Join 500+ enterprises", "cryptographic precision", "© 2024".
+- **Knowledge graph page redesigned.** Opens on the failure modes (count, share, tools), not
+  a physics hairball. Picking one shows only its chain — failure → tools that hit it →
+  capability reached for → goal it was missing in — laid out left to right, line thickness for
+  count. A reasoning panel gives what it is / why agents in general do this / why it matters /
+  how widespread it is here / what the judge said / what fixes it / the lesson fed back.
+  "Show everything" keeps the full graph one click away; raw edges sit in a collapsed table.
+  On phones the chain renders as a list (a 4-column graph is unreadable at 390px).
+- **Backend:** failure-mode nodes now keep the judge's last 3 explanations (`evidence`) and the
+  runs they appeared in (`seen_in_runs`), so the reasoning panel cites real verdicts. Older
+  entries predate this and say so. Tests: 168 passing.
+- **Skills (local only):** 29 skill folders in `.claude/skills/`, ignored via `.gitignore` and
+  `.git/info/exclude`; Three.js pack skipped (no 3D). Lighthouse and Playwright run from E:.
+- **Audit baseline (before Step 4 fixes):** Lighthouse perf mobile 29–66 / desktop 67–95,
+  accessibility 91–96, best practices 100, SEO 82. Dashboard scrolls sideways at 390px.
+
+### 2026-10-11 — Step 4: UI quality pass (project-ui router skill)
+
+Router skill `.claude/skills/project-ui/SKILL.md` (local, not committed) pins the rules: keep
+the brand, one design skill per task, mobile first, 44px targets, Lighthouse perf ≥ 90 and
+a11y ≥ 95, copy states only what is built.
+
+| Lighthouse (before → after) | Perf mobile | Perf desktop | A11y | SEO |
+|---|---|---|---|---|
+| Landing | 56 → 90 | 95 → 98 | 91 → 100 | 82 → 100 |
+| Dashboard | 66 → 93 | 94 → 98 | 91 → 100 | 82 → 100 |
+| Knowledge graph | 29 → 90 | 67 → 97 | 96 → 100 | 82 → 100 |
+
+Best practices 100 throughout. Mobile 90 is on the line — Lighthouse varies a few points run
+to run; the remaining cost is the React runtime itself (78 KB gz) and a 7 KB render-blocking CSS file.
+
+What changed, by finding:
+1. **Speed** — assets precompressed at build (`.gz`, Flask serves them, year-long cache on
+   hashed files); JSON API answers over 1 KB gzipped; app pages lazy-loaded with an inline
+   preload of the right chunk per URL; Material Symbols icon font dropped (icons are inline SVG);
+   Google Fonts no longer render-blocking; `framer-motion` and 7 dead components removed.
+   Main script 326 KB raw → 78 KB gzipped.
+2. **Graph page layout shift** 0.91 → 0.01–0.07; phones no longer download the 690 KB graph library.
+3. **Dashboard at 390px** — header wraps instead of scrolling sideways; Export stays visible;
+   Clear asks for confirmation; empty trace panel no longer fills a phone screen.
+4. **Landing copy rewritten to what is built.** Hero replays five verbatim verdicts from a real
+   run. Sections: what it catches (and how it knows — computed vs judged), how it works (the real
+   decorator), measured results with their caveats. Removed: fake "weather-agent" log table,
+   "self-healing" before/after, cost-spike and eval-trend claims, generic SaaS card grid.
+5. **Accessibility** — faint `/30–/60` text raised to full contrast, heading order fixed, labels
+   ≥ 12px with no tracked all-caps, body text 16px on phones, all controls ≥ 44px, a visible 2px
+   green focus ring, `prefers-reduced-motion` respected.
+6. **Scroll reveal removed** — it hid every section until scrolled into view.
+7. **SEO** — meta description, `robots.txt`, per-page titles, theme colour, on-brand favicon.
+
+Verified: webapp-testing at 390/768/1440 (no sideways scroll, 0 console errors), Lighthouse on
+all 3 pages × 2 form factors, and a full real-agent E2E (20 steps, 20 judged, 0 degraded; the
+reasoning panel quotes the judge's real explanations). Tests: 174 passing.
