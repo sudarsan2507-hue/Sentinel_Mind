@@ -28,3 +28,7 @@ knowledge/
 Thumbs.db
 .vscode/
 .idea/
+
+# Claude skills -- local tooling, never committed
+.claude/skills/
+.agents/
