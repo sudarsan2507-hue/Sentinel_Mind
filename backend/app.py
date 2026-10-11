@@ -79,6 +79,29 @@ def create_app(
     app = Flask(__name__, static_folder=None)
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
+    @app.after_request
+    def _gzip_json(resp):
+        """Compress larger JSON answers (/knowledge, /audit) when the client accepts it.
+
+        Built assets are precompressed at build time; API responses are dynamic,
+        so they are compressed here. Small bodies are left alone -- gzip costs
+        more than it saves under ~1 KB.
+        """
+        import gzip
+
+        if (
+            resp.mimetype == "application/json"
+            and not resp.direct_passthrough
+            and "gzip" in request.headers.get("Accept-Encoding", "")
+            and "Content-Encoding" not in resp.headers
+            and resp.content_length
+            and resp.content_length > 1024
+        ):
+            resp.set_data(gzip.compress(resp.get_data(), compresslevel=6))
+            resp.headers["Content-Encoding"] = "gzip"
+            resp.headers["Vary"] = "Accept-Encoding"
+        return resp
+
     app.config["AUDIT_LOG"] = audit_log or AuditLog()
     # Accumulated failure memory. Injected so tests get a throwaway graph and
     # never touch the persisted one on disk.
@@ -310,8 +333,32 @@ def create_app(
 
         target = FRONTEND_DIR / path
         if target.exists():
-            return send_from_directory(FRONTEND_DIR, path)
+            return _static(path)
         return send_from_directory(FRONTEND_DIR, "index.html")
+
+    def _static(path: str):
+        """A built asset, gzipped when the browser accepts it.
+
+        The build writes ``<file>.gz`` next to each asset. Serving raw was the
+        top Lighthouse finding: a 326 KB script and 52 KB of CSS sent
+        uncompressed, which on a throttled phone pushed first paint past 10s.
+        Precompressing at build time costs nothing per request. Hashed files
+        under /assets/ never change, so they are cached for a year.
+        """
+        import mimetypes
+
+        gz = FRONTEND_DIR / f"{path}.gz"
+        accepts = "gzip" in request.headers.get("Accept-Encoding", "")
+        if accepts and gz.exists():
+            resp = send_from_directory(FRONTEND_DIR, f"{path}.gz")
+            resp.headers["Content-Encoding"] = "gzip"
+            resp.mimetype = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        else:
+            resp = send_from_directory(FRONTEND_DIR, path)
+        resp.headers["Vary"] = "Accept-Encoding"
+        if path.startswith("assets/"):
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return resp
 
     return app, socketio
 
