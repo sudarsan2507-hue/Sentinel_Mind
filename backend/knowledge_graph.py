@@ -97,8 +97,12 @@ def classify_failure(event: dict, verdict: dict, known_tools: list[str]) -> str:
         return HALLUCINATED_TOOL
 
     # The meta-agent is told to trust the deterministic repeat signal, so its
-    # loop language is reliable here.
-    if "loop" in explanation or "repeat" in explanation:
+    # loop language is reliable here -- except on model calls. The agent plans
+    # with one every step, and a lesson telling it to "call agent_llm_call once"
+    # (learned live, before the judge stopped counting them) is nonsense.
+    if event.get("step_type") != "model_call" and (
+        "loop" in explanation or "repeat" in explanation or "circling" in explanation
+    ):
         return INFINITE_LOOP
 
     if event.get("error"):
@@ -188,6 +192,29 @@ class KnowledgeGraph:
         node.update(extra)
         return key
 
+    EVIDENCE_KEPT = 3
+
+    def _note_evidence(self, key: tuple[str, str], tool: str, verdict: dict) -> None:
+        """Keep the judge's own words, and which runs this failure appeared in.
+
+        A failure-mode node used to hold only a count, so the UI could say *that*
+        an agent hallucinated tools but not *why we think so*. The last few
+        explanations are the evidence; the run spread says whether this is one bad
+        run or a pattern. Caller holds the lock.
+        """
+        node = self._nodes[key]
+        evidence = node.setdefault("evidence", [])
+        evidence.append({
+            "tool": tool,
+            "status": verdict.get("status"),
+            "explanation": (verdict.get("explanation") or "")[:300],
+            "at": node["last_seen"],
+        })
+        del evidence[: -self.EVIDENCE_KEPT]
+        runs = node.setdefault("seen_in_runs", [])
+        if self._runs not in runs:
+            runs.append(self._runs)
+
     def ingest(
         self,
         event: dict,
@@ -212,6 +239,7 @@ class KnowledgeGraph:
             tool_key = self._touch("tool", tool, last_verdict=verdict.get("status"))
             failure_key = self._touch("failure_mode", failure)
             self._edges[(tool_key, "exhibits", failure_key)] += 1
+            self._note_evidence(failure_key, tool, verdict)
 
             # classify_failure returns a single primary mode, but a step can
             # exhibit more than one. An unregistered tool that also raised is
@@ -220,6 +248,7 @@ class KnowledgeGraph:
             if event.get("error") and failure != EXCEPTION:
                 also_key = self._touch("failure_mode", EXCEPTION)
                 self._edges[(tool_key, "exhibits", also_key)] += 1
+                self._note_evidence(also_key, tool, verdict)
 
             # Only hallucinated tools imply a missing capability. A loop on a
             # legitimate tool is not a capability gap.
@@ -339,9 +368,9 @@ class KnowledgeGraph:
 
         for tool, count in looping:
             out.append(
-                f"Calling '{tool}' repeatedly with the same arguments has been flagged as a "
-                f"loop {count} time(s). Its output does not change between calls -- call it "
-                f"once, then work with what it returned."
+                f"Calling '{tool}' over and over has been flagged as a loop {count} time(s) -- "
+                f"repeating it, even with reworded inputs, did not move the task forward. Call "
+                f"it once or twice, then act on what it returned or give your final answer."
             )
 
         if runs and not out:

@@ -414,3 +414,38 @@ def test_summary_counts_nodes_by_type(graph):
     assert summary["runs"] == 1
     assert summary["by_type"] == {"tool": 1, "failure_mode": 1, "capability": 1, "goal": 1}
     assert summary["edges"] == 3
+
+
+def test_a_model_call_is_never_classified_as_a_loop():
+    """The agent plans with a model call every step. Learned live before this
+    guard: a lesson telling the agent to call its own LLM only once."""
+    event = _event(tool="agent_llm_call", step_type="model_call")
+    verdict = _verdict(explanation="The agent is repeatedly invoking the LLM, a loop.")
+    assert classify_failure(event, verdict, KNOWN + ["agent_llm_call"]) != INFINITE_LOOP
+
+
+def test_circling_language_is_a_loop_for_tool_calls():
+    verdict = _verdict(explanation="Varied queries with no progress: circling.")
+    assert classify_failure(_event(), verdict, KNOWN) == INFINITE_LOOP
+
+
+def test_failure_modes_keep_recent_evidence_and_run_spread(tmp_path):
+    """The UI explains a failure with the judge's own words, so they must be kept
+    -- but only the last few, or the store grows without bound."""
+    kg = KnowledgeGraph(tmp_path / "g.json")
+    kg.start_run()
+    for i in range(5):
+        kg.ingest(_event(tool=f"invented_{i}"), _verdict(explanation=f"reason {i}"), KNOWN)
+    kg.start_run()
+    kg.ingest(_event(tool="invented_9"), _verdict(explanation="reason 9"), KNOWN)
+
+    node = next(n for n in kg.snapshot()["nodes"] if n["id"] == "hallucinated_tool")
+    assert [e["explanation"] for e in node["evidence"]] == ["reason 3", "reason 4", "reason 9"]
+    assert node["evidence"][-1]["tool"] == "invented_9"
+    assert node["seen_in_runs"] == [1, 2]
+
+    # Survives a reload -- it is part of the node, so it persists with it.
+    kg.save()
+    again = KnowledgeGraph(tmp_path / "g.json")
+    node = next(n for n in again.snapshot()["nodes"] if n["id"] == "hallucinated_tool")
+    assert len(node["evidence"]) == 3
