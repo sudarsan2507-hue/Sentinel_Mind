@@ -1,237 +1,401 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 
-/* ─── Why each failure mode happens ───
-   The graph records THAT an agent failed. This is the general reasoning for
-   WHY agents fail that way -- true of LLM agents broadly, not just this one --
-   so a reader can check the pattern against agents they have run themselves.
-   The page pairs it with this store's own evidence: counts, spread across
-   tools and runs, and the judge's actual words. Text here is deliberately
-   free of statistics we have not measured. */
-const FAILURE_REASONING = {
+/* ─── Failure modes, in a sentence each ───
+   The page used to explain every failure in four paragraphs; nobody reads
+   that. `short` is the one line on screen; the rest sits behind a disclosure
+   for anyone who wants the reasoning. True of LLM agents generally -- no
+   statistics we have not measured. */
+const FAILURE = {
   hallucinated_tool: {
-    title: 'Hallucinated tool',
-    what: 'The agent called a tool or endpoint that does not exist in its registry.',
-    why: 'A language model continues patterns. When a task implies an action — issue a refund, notify the customer — and no tool provides it, the most plausible next token is a plausible-looking tool name. The model writes the tool it expects to exist rather than admitting the gap.',
-    impact: 'Best case the call fails noisily. Worst case the invented name matches a real endpoint and performs an action nobody approved.',
-    remedy: 'Make the gap explicit: the agent should say the action needs a human. The distilled lesson below tells it exactly that, by capability rather than by URL, because the invented path changes every run while the missing capability does not.',
+    title: 'Invented tool',
+    short: 'Asked for an action it has no tool for, it made one up.',
+    why: 'A language model continues patterns. When a task implies an action — issue a refund, notify the customer — and no tool provides it, the most plausible continuation is a plausible-looking tool name.',
+    fix: 'Tell the agent the capability is missing, by capability rather than by URL, so it says a human is needed instead of inventing another endpoint.',
   },
   infinite_loop: {
     title: 'Loop',
-    what: 'The same tool called again and again — with identical or reworded input — without the task moving forward.',
-    why: 'An agent has no built-in sense of “I already tried this”. Each step is chosen from the context; if the last result did not resolve the uncertainty, the same action is still the most likely next one. Rewording the query hides the loop from exact-match checks, which is why SentinelMind also counts calls per tool.',
-    impact: 'Burns time, tokens and rate limits, and only ends when a step ceiling cuts it off.',
-    remedy: 'Call once or twice, then act on what came back or answer. The distilled lesson names the tool that loops.',
+    short: 'Called the same tool again and again without getting anywhere.',
+    why: 'An agent has no built-in sense of “I already tried this”. If a result does not resolve the uncertainty, the same action stays the most likely next step — and rewording the query hides it from exact-match checks.',
+    fix: 'Call once or twice, then act on what came back or answer.',
   },
   goal_drift: {
     title: 'Goal drift',
-    what: 'Steps stop serving the goal the run was given.',
-    why: 'In a long context the original instruction is one message among many; the most recent tool output steers the next step more strongly than the goal does. The agent follows the trail of its own results.',
-    impact: 'The run can finish without a single error — on the wrong task. Nothing in the logs flags it.',
-    remedy: 'Judge every step against the declared session goal, which is what the meta-agent does. There is no deterministic remedy to inject, so no lesson is distilled for it yet.',
+    short: 'Stopped working on what it was asked to do.',
+    why: 'In a long context the original instruction is one message among many; the latest tool output steers the next step more than the goal does.',
+    fix: 'Judge every step against the declared goal. There is no deterministic remedy to inject yet.',
   },
   exception: {
-    title: 'Exception',
-    what: 'The step raised an error — a permission denial, timeout or upstream failure.',
-    why: 'Often a downstream effect of another failure: an invented endpoint answers 403. Agents also tend to swallow the error and carry on, because the next step is still generated whether or not the last one worked.',
-    impact: 'If swallowed, later steps build on data that was never returned.',
-    remedy: 'Surface the error in the final answer instead of retrying blindly. Look at which other failure mode the same tools show — that is usually the cause.',
+    title: 'Error',
+    short: 'A call failed — often because the tool it called does not exist.',
+    why: 'Usually a downstream effect: an invented endpoint answers 403. Agents also tend to carry on after an error, because the next step is generated either way.',
+    fix: 'Surface the error in the answer instead of retrying blindly; check which other failure the same tools show.',
   },
   inefficient_reasoning: {
-    title: 'Inefficient reasoning',
-    what: 'The step worked, but something was off: slow, oddly shaped input, or output only loosely tied to the request.',
-    why: 'This is the catch-all for warnings with no hard signal behind them. Individually minor; repeated on one tool it usually precedes a sharper failure.',
-    impact: 'Wasted latency and cost; an early signal worth watching.',
-    remedy: 'Watch the trend on the tools listed. No lesson is injected for it.',
+    title: 'Sloppy step',
+    short: 'Worked, but slow, oddly shaped or only loosely on topic.',
+    why: 'The catch-all for warnings with no hard signal behind them. Minor alone; repeated on one tool it often comes before a sharper failure.',
+    fix: 'Watch the trend on the tools involved.',
   },
 };
 
-const RELATION_LABEL = { exhibits: 'hit', requires: 'reached for', missing_in: 'missing in' };
-
-/* Which distilled lessons speak to which failure mode. The backend writes only
-   two kinds -- missing capabilities and loops -- so the mapping is exact. */
-function lessonsFor(failureId, lessons) {
-  if (failureId === 'hallucinated_tool') return lessons.filter((l) => /^You have NO tool|NOT in your tool registry/.test(l));
-  if (failureId === 'infinite_loop') return lessons.filter((l) => /flagged as a loop/.test(l));
-  return [];
+/* Lessons are written for the agent, in full sentences. On screen they get a headline. */
+function lessonHeadline(text) {
+  let m = text.match(/You have NO tool that can (.+?)\. Across (\d+)/);
+  if (m) return { head: `Can't ${m[1]}`, n: `${m[2]} attempt${m[2] === '1' ? '' : 's'}`, kind: 'hallucinated_tool' };
+  m = text.match(/Calling '(.+?)' over and over has been flagged as a loop (\d+)/);
+  if (m) return { head: `Loops on ${m[1]}`, n: `${m[2]}×`, kind: 'infinite_loop' };
+  m = text.match(/NOT in your tool registry and calling them has failed (\d+)/);
+  if (m) return { head: 'Unregistered tools', n: `${m[1]}×`, kind: 'hallucinated_tool' };
+  return { head: text.split('.')[0], n: '', kind: null };
 }
 
-/* failure -> tools that hit it -> capabilities they reached for -> goals they were missing in */
-function chainFor(failureId, edges) {
-  const hits = edges.filter((e) => e.relation === 'exhibits' && e.dst_id === failureId);
-  const tools = new Set(hits.map((e) => e.src_id));
-  const reaches = edges.filter((e) => e.relation === 'requires' && tools.has(e.src_id));
-  const caps = new Set(reaches.map((e) => e.dst_id));
-  const gaps = edges.filter((e) => e.relation === 'missing_in' && caps.has(e.src_id));
-  return { hits, reaches, gaps, tools: [...tools], caps: [...caps], goals: [...new Set(gaps.map((e) => e.dst_id))] };
-}
-
-const short = (s, n = 34) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
-
-/* ─── Graph ───
-   Layered left to right in the order you read the chain, instead of a physics
-   simulation: same input, same picture, every time. */
-const LEVEL = { failure_mode: 0, tool: 1, capability: 2, goal: 3 };
-const STYLE = {
-  failure_mode: { background: '#2a1416', border: '#f87171' },
-  tool:         { background: '#141917', border: '#3d5c48' },
-  capability:   { background: '#221b0e', border: '#c08a2e' },
-  goal:         { background: '#18181b', border: '#52525b' },
+const COLORS = {
+  failure_mode: { fill: '#2a1416', stroke: '#f87171' },
+  tool: { fill: '#121815', stroke: '#4a7a5a' },
+  capability: { fill: '#241c0d', stroke: '#e0a43a' },
 };
+const key = (n) => `${n.type}:${n.id}`;
 
-function ChainGraph({ nodes, edges, onPickFailure }) {
-  const hostRef = useRef(null);
-  const netRef = useRef(null);
-  const pickRef = useRef(onPickFailure);
-  useEffect(() => { pickRef.current = onPickFailure; }, [onPickFailure]);
-
-  const tallest = Math.max(1, ...Object.values(
-    nodes.reduce((acc, n) => ({ ...acc, [n.type]: (acc[n.type] || 0) + 1 }), {}),
-  ));
-  const height = Math.min(620, Math.max(220, tallest * 40 + 40));
-
+/* Real pixel width of the container -- callback ref, so it follows remounts. */
+function useWidth() {
+  const [node, setNode] = useState(null);
+  const [w, setW] = useState(0);
   useEffect(() => {
-    let cancelled = false;
-    import('vis-network/standalone').then(({ Network, DataSet }) => {
-      if (cancelled || !hostRef.current) return;
-      netRef.current?.destroy();
-      const net = new Network(
-        hostRef.current,
-        {
-          nodes: new DataSet(nodes.map((n) => ({
-            id: `${n.type}:${n.id}`,
-            label: short(n.type === 'tool' ? n.id.replace(/^internal_api:/, 'api ') : n.id.replace(/_/g, ' ')),
-            title: `${n.id} · ×${n.count}`,
-            level: LEVEL[n.type],
-            color: { ...STYLE[n.type], highlight: STYLE[n.type], hover: STYLE[n.type] },
-            font: n.type === 'failure_mode' ? { bold: true } : {},
-          }))),
-          edges: new DataSet(edges.map((e, i) => ({
-            id: i,
-            from: `${e.src_type}:${e.src_id}`,
-            to: `${e.dst_type}:${e.dst_id}`,
-            // Thickness carries the count; per-edge labels turned the graph into noise.
-            width: 1 + Math.log2(e.count),
-            title: `${e.src_id} ${RELATION_LABEL[e.relation] || e.relation} ${e.dst_id} ×${e.count}`,
-          }))),
-        },
-        {
-          layout: { hierarchical: { direction: 'LR', levelSeparation: 260, nodeSpacing: 40, sortMethod: 'directed' } },
-          physics: false,
-          nodes: {
-            shape: 'box',
-            margin: { top: 7, bottom: 7, left: 10, right: 10 },
-            borderWidth: 1,
-            shapeProperties: { borderRadius: 4 },
-            font: { color: '#e4e4e7', size: 12, face: 'Inter, system-ui, sans-serif' },
-          },
-          edges: {
-            color: { color: '#3f3f46', highlight: '#a1a1aa', hover: '#a1a1aa' },
-            width: 1,
-            arrows: { to: { enabled: false } },
-            smooth: { type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.5 },
-          },
-          interaction: { hover: true, dragNodes: false, zoomView: false, dragView: false, tooltipDelay: 150 },
-        },
-      );
-      net.once('afterDrawing', () => {
-        net.fit({ animation: false });
-        if (net.getScale() > 1.1) net.moveTo({ scale: 1.1 }); // a 3-node chain should not fill the screen
-      });
-      net.on('click', ({ nodes: hit }) => {
-        if (hit[0]?.startsWith('failure_mode:')) pickRef.current(hit[0].slice('failure_mode:'.length));
-      });
-      netRef.current = net;
-    });
-    return () => { cancelled = true; };
-  }, [nodes, edges]);
-
-  useEffect(() => () => { netRef.current?.destroy(); netRef.current = null; }, []);
-
-  return <div ref={hostRef} data-testid="knowledge-network" style={{ height }} className="w-full" />;
+    if (!node) return undefined;
+    const ro = new ResizeObserver(([e]) => setW(Math.floor(e.contentRect.width)));
+    ro.observe(node);
+    return () => ro.disconnect();
+  }, [node]);
+  return [setNode, w];
 }
 
-/* ─── Phone view of the same chain ───
-   A four-column graph cannot be read at 390px -- vis just shrinks it. On small
-   screens the chain is the same facts as a list, in the same order. */
-function ChainList({ chain }) {
-  const cols = [
-    ['Tools that hit it', [...chain.hits].sort((a, b) => b.count - a.count).map((e) => [e.src_id, e.count])],
-    ['Capability they reached for', chain.caps.map((c) => [c.replace(/_/g, ' '), chain.reaches.filter((e) => e.dst_id === c).reduce((n, e) => n + e.count, 0)])],
-    ['Goal it was missing in', chain.goals.map((g) => [g, null])],
-  ];
+/* ─── Layout ───
+   Rings around the agent, read inside-out: how it failed, which tools did it,
+   what they were reaching for. Deterministic -- the same memory draws the same
+   picture every time, unlike a physics simulation. Tools sit next to the
+   failure they show most; capabilities next to the tools that wanted them. */
+function spread(items, rx, ry, cx, cy) {
+  if (!items.length) return [];
+  const sorted = [...items].sort((a, b) => a.a - b.a);
+  const step = (2 * Math.PI) / sorted.length;
+  let sx = 0; let sy = 0;
+  sorted.forEach((it, i) => { sx += Math.sin(it.a - i * step); sy += Math.cos(it.a - i * step); });
+  const offset = Math.atan2(sx, sy);
+  return sorted.map((it, i) => {
+    const a = offset + i * step;
+    return { ...it, a, x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) };
+  });
+}
+
+const RING = { fail: 0.34, tool: 0.6, cap: 1 };
+// Phones: no room for labels around the rim, so the rings use the full width
+// and spread further apart; names appear for what you tap (and in the card).
+const RING_NARROW = { fail: 0.44, tool: 0.74, cap: 1 };
+const margin = (narrow) => (narrow ? 22 : 150);
+
+function computeLayout(nodes, edges, W, H) {
+  const cx = W / 2; const cy = H / 2;
+  const narrow = W < 640;
+  const R = narrow ? RING_NARROW : RING;
+  const RX = W / 2 - margin(narrow);
+  const RY = H / 2 - 40;
+  const pos = new Map();
+  const fails = nodes.filter((n) => n.type === 'failure_mode').sort((a, b) => b.count - a.count);
+  fails.forEach((f, i) => {
+    const a = -Math.PI / 2 + (i * 2 * Math.PI) / Math.max(1, fails.length);
+    pos.set(key(f), { a, x: cx + RX * R.fail * Math.cos(a), y: cy + RY * R.fail * Math.sin(a) });
+  });
+  const meanAngle = (pairs) => {
+    let sx = 0; let sy = 0;
+    pairs.forEach(([a, w]) => { sx += Math.cos(a) * w; sy += Math.sin(a) * w; });
+    return Math.atan2(sy, sx);
+  };
+  const tools = nodes.filter((n) => n.type === 'tool').map((t) => ({
+    n: t,
+    a: meanAngle(edges.filter((e) => e.relation === 'exhibits' && e.src_id === t.id)
+      .map((e) => [pos.get(`failure_mode:${e.dst_id}`)?.a ?? 0, e.count])),
+  }));
+  spread(tools, RX * R.tool, RY * R.tool, cx, cy).forEach((t) => pos.set(key(t.n), t));
+  const caps = nodes.filter((n) => n.type === 'capability').map((c) => ({
+    n: c,
+    a: meanAngle(edges.filter((e) => e.relation === 'requires' && e.dst_id === c.id)
+      .map((e) => [pos.get(`tool:${e.src_id}`)?.a ?? 0, e.count])),
+  }));
+  spread(caps, RX, RY, cx, cy).forEach((c) => pos.set(key(c.n), c));
+  return { pos, cx, cy };
+}
+
+/* ─── The graph ─── */
+function MemoryGraph({ nodes, edges, focus, onFocus }) {
+  const [box, W0] = useWidth();
+  const [hover, setHover] = useState(null);
+  const W = Math.max(320, W0 || 900);
+  const H = W < 640 ? Math.round(W * 1.1) : Math.max(520, Math.min(680, Math.round(W * 0.56)));
+  const narrow = W < 640;
+
+  // Goals are context, not structure -- they appear in the card, not as nodes.
+  const shown = useMemo(() => nodes.filter((n) => n.type !== 'goal'), [nodes]);
+  const links = useMemo(() => edges.filter((e) => e.relation !== 'missing_in'), [edges]);
+  const { pos, cx, cy } = useMemo(() => computeLayout(shown, links, W, H), [shown, links, W, H]);
+  const invented = useMemo(() => new Set(links.filter((e) => e.relation === 'requires').map((e) => e.src_id)), [links]);
+
+  // The lit neighbourhood: whatever is hovered, else whatever is selected.
+  const active = hover || focus;
+  const lit = useMemo(() => {
+    if (!active) return null;
+    const s = new Set([active]);
+    const near = links.filter((e) => `${e.src_type}:${e.src_id}` === active || `${e.dst_type}:${e.dst_id}` === active);
+    near.forEach((e) => { s.add(`${e.src_type}:${e.src_id}`); s.add(`${e.dst_type}:${e.dst_id}`); });
+    // A failure lights its tools AND what those tools were reaching for: the whole chain.
+    if (active.startsWith('failure_mode:')) {
+      const tools = new Set(near.map((e) => e.src_id));
+      links.filter((e) => e.relation === 'requires' && tools.has(e.src_id)).forEach((e) => s.add(`capability:${e.dst_id}`));
+    }
+    return s;
+  }, [active, links]);
+  const edgeLit = (e) => !lit || (lit.has(`${e.src_type}:${e.src_id}`) && lit.has(`${e.dst_type}:${e.dst_id}`));
+
+  const radius = (n) => (n.type === 'failure_mode' ? (narrow ? 10 + Math.sqrt(n.count) * 2.2 : 13 + Math.sqrt(n.count) * 3.2) : n.type === 'tool' ? 6 + Math.min(n.count, 8) : 9 + Math.min(n.count, 8) * 0.8);
+
   return (
-    <div className="px-5 py-4 flex flex-col gap-4">
-      {cols.filter(([, items]) => items.length).map(([label, items]) => (
-        <div key={label}>
-          <h3 className="font-label-sm text-[12px] text-on-surface-variant mb-2">{label}</h3>
-          <ul className="flex flex-col gap-1.5">
-            {items.map(([name, n]) => (
-              <li key={name} className="flex justify-between gap-3 font-body-md text-[16px] md:text-[14px] text-on-surface">
-                <span className="break-all">{name}</span>
-                {n != null && <span className="tabular-nums text-on-surface-variant">×{n}</span>}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
+    <div ref={box} className="relative w-full">
+      <svg width={W} height={H} className="block" role="img" aria-label={`Failure memory: ${shown.filter((n) => n.type === 'failure_mode').length} kinds of failure across ${shown.filter((n) => n.type === 'tool').length} tools`}>
+        <defs>
+          <radialGradient id="kg-core" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="#00ff66" stopOpacity="0.35" />
+            <stop offset="100%" stopColor="#00ff66" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+        {/* rings */}
+        {Object.values(narrow ? RING_NARROW : RING).map((f) => (
+          <ellipse key={f} cx={cx} cy={cy} rx={(W / 2 - margin(narrow)) * f} ry={(H / 2 - 40) * f} fill="none" stroke="#ffffff0d" strokeDasharray="2 6" />
+        ))}
+        {/* the agent at the centre, with spokes to each way it failed */}
+        <circle cx={cx} cy={cy} r="46" fill="url(#kg-core)" />
+        {shown.filter((n) => n.type === 'failure_mode').map((f) => {
+          const p = pos.get(key(f));
+          const on = !lit || lit.has(key(f));
+          return <line key={`spoke-${f.id}`} x1={cx} y1={cy} x2={p.x} y2={p.y} stroke="#f87171" strokeOpacity={on ? 0.35 : 0.06} strokeWidth="1" className="kg-edge" />;
+        })}
+        <circle cx={cx} cy={cy} r="15" fill="#0b120d" stroke="#00ff66" strokeWidth="1.5" />
+        <text x={cx} y={cy + 32} textAnchor="middle" className="fill-on-surface-variant" style={{ font: '12px Inter, sans-serif' }}>the agent</text>
+
+        {/* links, curved toward the centre */}
+        {links.map((e, i) => {
+          const a = pos.get(`${e.src_type}:${e.src_id}`);
+          const b = pos.get(`${e.dst_type}:${e.dst_id}`);
+          if (!a || !b) return null;
+          const mx = (a.x + b.x) / 2 * 0.8 + cx * 0.2;
+          const my = (a.y + b.y) / 2 * 0.8 + cy * 0.2;
+          const on = edgeLit(e);
+          return (
+            <path
+              key={i}
+              d={`M${a.x} ${a.y} Q${mx} ${my} ${b.x} ${b.y}`}
+              fill="none"
+              stroke={e.relation === 'requires' ? '#e0a43a' : '#f87171'}
+              strokeOpacity={on ? (lit ? 0.85 : 0.35) : 0.05}
+              strokeWidth={1 + Math.log2(e.count)}
+              className="kg-edge"
+              style={{ animationDelay: `${200 + i * 12}ms` }}
+            />
+          );
+        })}
+
+        {/* nodes */}
+        {shown.map((n, i) => {
+          const p = pos.get(key(n));
+          if (!p) return null;
+          const k = key(n);
+          const on = !lit || lit.has(k);
+          const sel = focus === k;
+          const r = radius(n);
+          const c = COLORS[n.type];
+          const showLabel = !narrow || n.type === 'failure_mode' || k === active;
+          // Labels point away from the centre. Tool names run radially, like
+          // spokes, so neighbours on the ring can never overlap; the few
+          // failures and capabilities read horizontally.
+          const dx = Math.cos(p.a); const dy = Math.sin(p.a);
+          // On phones the rim has no room, so a tapped label sits centred under its node.
+          const radial = n.type === 'tool' && !narrow;
+          const flip = dx < 0;
+          const deg = (p.a * 180) / Math.PI + (flip ? 180 : 0);
+          const under = narrow && n.type !== 'failure_mode';
+          const anchor = under ? 'middle' : radial ? (flip ? 'end' : 'start') : dx > 0.3 ? 'start' : dx < -0.3 ? 'end' : 'middle';
+          const lx = under ? Math.min(W - 60, Math.max(60, p.x)) : p.x + dx * (r + 7);
+          const ly = under ? p.y + r + 16 : radial ? p.y + dy * (r + 7) : p.y + dy * (r + 9) + (anchor === 'middle' ? (dy > 0 ? 11 : -3) : 4);
+          const labelTransform = radial ? `rotate(${deg} ${lx} ${ly})` : undefined;
+          const raw = n.type === 'tool' ? n.id.replace(/^internal_api:/, '') : n.type === 'failure_mode' ? (FAILURE[n.id]?.title ?? n.id) : n.id.replace(/_/g, ' ');
+          const max = n.type === 'tool' ? (narrow ? 14 : 18) : 26;
+          const label = raw.length > max ? `${raw.slice(0, max - 1)}…` : raw;
+          return (
+            <g
+              key={k}
+              className="kg-node cursor-pointer"
+              style={{ animationDelay: `${n.type === 'failure_mode' ? 0 : n.type === 'tool' ? 150 + i * 18 : 400 + i * 18}ms`, transformOrigin: `${p.x}px ${p.y}px` }}
+              opacity={on ? 1 : 0.15}
+              onMouseEnter={() => setHover(k)}
+              onMouseLeave={() => setHover(null)}
+              onClick={() => onFocus(k)}
+              role="button"
+              tabIndex={0}
+              aria-label={`${n.type.replace('_', ' ')} ${raw}, seen ${n.count} times`}
+              onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); onFocus(k); } }}
+            >
+              <circle cx={p.x} cy={p.y} r={Math.max(r, 14)} fill="transparent" />
+              {sel && n.type === 'failure_mode' && <circle cx={p.x} cy={p.y} r={r + 8} fill="none" stroke="#f87171" strokeOpacity="0.5" className="kg-pulse" style={{ transformOrigin: `${p.x}px ${p.y}px` }} />}
+              {n.type === 'capability' ? (
+                <rect x={p.x - r} y={p.y - r} width={r * 2} height={r * 2} rx="3" transform={`rotate(45 ${p.x} ${p.y})`} fill={c.fill} stroke={c.stroke} strokeWidth="1.5" />
+              ) : (
+                <circle
+                  cx={p.x} cy={p.y} r={r}
+                  fill={c.fill}
+                  stroke={sel ? '#ffffff' : c.stroke}
+                  strokeWidth={n.type === 'failure_mode' ? 2 : 1.5}
+                  strokeDasharray={n.type === 'tool' && invented.has(n.id) ? '3 2.5' : undefined}
+                />
+              )}
+              {n.type === 'failure_mode' && (
+                <text x={p.x} y={p.y + 5} textAnchor="middle" className="fill-on-background" style={{ font: '700 14px Inter, sans-serif' }}>{n.count}</text>
+              )}
+              {showLabel && (
+                <text
+                  x={lx} y={ly} textAnchor={anchor} transform={labelTransform} dominantBaseline={radial ? 'middle' : undefined}
+                  className={n.type === 'failure_mode' ? 'fill-on-background' : 'fill-on-surface-variant'}
+                  style={{ font: n.type === 'failure_mode' ? '600 13px Inter, sans-serif' : n.type === 'tool' ? '500 11px "JetBrains Mono", monospace' : '500 12px Inter, sans-serif' }}
+                >
+                  {label}
+                  {label !== raw && <title>{raw}</title>}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
     </div>
   );
 }
 
-/* Phones get the list, so they should not download the 690 KB graph library
-   just to hide it. Tracks the breakpoint the layout uses (md = 768px). */
-function useWide() {
-  const query = '(min-width: 768px)';
-  const [wide, setWide] = useState(() => window.matchMedia(query).matches);
-  useEffect(() => {
-    const mq = window.matchMedia(query);
-    const onChange = (e) => setWide(e.matches);
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  }, []);
-  return wide;
-}
+/* ─── The card for whatever is selected ─── */
+function FocusCard({ focusKey, nodes, edges, lessons, totalFailures, runs }) {
+  if (!focusKey) return null;
+  const [type, ...rest] = focusKey.split(':');
+  const id = rest.join(':');
+  const node = nodes.find((n) => n.type === type && n.id === id);
+  if (!node) return null;
 
-/* ─── Section shell ─── */
-function Panel({ title, aside, children, className = '' }) {
-  return (
-    <section className={`bg-surface-container-low border border-outline-variant/20 rounded-xl overflow-hidden ${className}`}>
-      <div className="px-5 py-3.5 border-b border-outline-variant/15 flex items-center justify-between gap-4">
-        <h2 className="font-headline-lg text-[17px] text-on-background">{title}</h2>
-        {aside}
+  if (type === 'failure_mode') {
+    const f = FAILURE[id] ?? { title: id, short: '', why: '', fix: '' };
+    const hits = edges.filter((e) => e.relation === 'exhibits' && e.dst_id === id).sort((a, b) => b.count - a.count);
+    const latest = node.evidence?.[node.evidence.length - 1];
+    const myLessons = lessons.map(lessonHeadline).filter((l) => l.kind === id);
+    const share = totalFailures ? Math.round((node.count / totalFailures) * 100) : 0;
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <p className="text-[13px] text-error">Failure</p>
+            <h2 className="font-headline-lg text-[26px] font-bold text-on-background leading-tight">{f.title}</h2>
+          </div>
+          <div className="text-right">
+            <p className="font-headline-lg text-[34px] font-bold leading-none tabular-nums text-on-background">{node.count}</p>
+            <p className="text-[13px] text-on-surface-variant">{share}% of failures</p>
+          </div>
+        </div>
+        <p className="text-[16px] leading-snug text-on-background">{f.short}</p>
+        <div className="flex flex-wrap gap-1.5">
+          {hits.slice(0, 6).map((e) => (
+            <span key={e.src_id} className="rounded-md border border-outline-variant/50 px-2 py-1 font-label-sm text-[12px] text-on-surface-variant">
+              {e.src_id.replace(/^internal_api:/, '')}{e.count > 1 ? ` ×${e.count}` : ''}
+            </span>
+          ))}
+          {hits.length > 6 && <span className="px-1 py-1 text-[12px] text-on-surface-variant">+{hits.length - 6} more</span>}
+        </div>
+        {latest && (
+          <blockquote className="border-l-2 border-error/60 pl-3 text-[14px] leading-snug text-on-surface-variant">
+            <span className="line-clamp-3">“{latest.explanation}”</span>
+            <span className="mt-1 block text-[12px] text-on-surface-variant/90">the judge, on {latest.tool}</span>
+          </blockquote>
+        )}
+        {myLessons.length > 0 && (
+          <div className="rounded-lg border border-primary-container/25 bg-primary-container/[0.05] px-3 py-2.5">
+            <p className="text-[12px] text-primary-container">What the agent is told next run</p>
+            <ul className="mt-1 flex flex-col gap-0.5">
+              {myLessons.map((l) => <li key={l.head} className="text-[14px] text-on-background">{l.head} <span className="text-on-surface-variant">· {l.n}</span></li>)}
+            </ul>
+          </div>
+        )}
+        <details className="group">
+          <summary className="cursor-pointer min-h-11 flex items-center text-[14px] text-on-surface-variant hover:text-on-background">Why does this happen?</summary>
+          <div className="mt-1 flex flex-col gap-2 text-[14px] leading-relaxed text-on-surface-variant">
+            <p>{f.why}</p>
+            <p><span className="text-on-background">Fix: </span>{f.fix}</p>
+            {node.seen_in_runs && <p className="text-[13px]">Seen in {node.seen_in_runs.length} of the runs since per-run tracking began ({runs} recorded).</p>}
+          </div>
+        </details>
       </div>
-      {children}
-    </section>
+    );
+  }
+
+  if (type === 'tool') {
+    const modes = edges.filter((e) => e.relation === 'exhibits' && e.src_id === id);
+    const cap = edges.find((e) => e.relation === 'requires' && e.src_id === id);
+    return (
+      <div className="flex flex-col gap-3">
+        <p className="text-[13px] text-on-surface-variant">{cap ? 'Invented tool' : 'Tool'}</p>
+        <h2 className="font-label-sm text-[18px] text-on-background break-all">{id}</h2>
+        <p className="text-[16px] text-on-background">
+          Flagged {node.count} time{node.count === 1 ? '' : 's'}{node.last_verdict ? `, last as ${node.last_verdict.toLowerCase()}` : ''}.
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {modes.map((e) => (
+            <span key={e.dst_id} className="rounded-md border border-error/40 px-2 py-1 text-[13px] text-on-background">{FAILURE[e.dst_id]?.title ?? e.dst_id} ×{e.count}</span>
+          ))}
+        </div>
+        {cap && <p className="text-[15px] text-on-surface-variant">It does not exist. The agent wanted to <span className="text-amber-300">{cap.dst_id.replace(/_/g, ' ')}</span> and made a tool up for it.</p>}
+      </div>
+    );
+  }
+
+  // capability
+  const tried = edges.filter((e) => e.relation === 'requires' && e.dst_id === id);
+  const goals = edges.filter((e) => e.relation === 'missing_in' && e.src_id === id);
+  const attempts = tried.reduce((n, e) => n + e.count, 0);
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-[13px] text-amber-300">Missing capability</p>
+      <h2 className="font-headline-lg text-[24px] font-bold text-on-background">{id.replace(/_/g, ' ')}</h2>
+      <p className="text-[16px] text-on-background">
+        The agent reached for this {attempts} time{attempts === 1 ? '' : 's'} with {tried.length} different invented name{tried.length === 1 ? '' : 's'}. It has no tool that can do it.
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {tried.map((e) => <span key={e.src_id} className="rounded-md border border-outline-variant/50 px-2 py-1 font-label-sm text-[12px] text-on-surface-variant">{e.src_id.replace(/^internal_api:/, '')}</span>)}
+      </div>
+      {goals[0] && <p className="text-[14px] text-on-surface-variant line-clamp-2">Needed for: {goals[0].dst_id}</p>}
+    </div>
   );
 }
 
-/* ─── Main Knowledge Graph Page ─── */
+/* ─── Main page ─── */
 export default function KnowledgeGraphPage() {
   const { connected, on } = useSocket();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [picked, setPicked] = useState(null);
-  const [showAll, setShowAll] = useState(false);
+  const [openLesson, setOpenLesson] = useState(null);
   const [lastLearnedTs, setLastLearnedTs] = useState(null);
   const [busy, setBusy] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [error, setError] = useState(null);
-  const wide = useWide();
 
   useEffect(() => {
     document.title = 'Failure memory · SentinelMind';
   }, []);
 
   /* A button that succeeds silently is indistinguishable from a broken one.
-     Every action reports: busy while in flight, a timestamp on success, and the
-     server's own message on failure.
-
-     `announce` exists so the mount effect can fetch WITHOUT setting state
-     synchronously in the effect body -- that cascades renders, and React's lint
-     rule flags it. State set inside the promise callbacks is async and fine;
-     only the busy/error reset up front was the problem. */
+     `announce` lets the mount effect fetch without setting state synchronously. */
   const load = useCallback((announce) => {
     if (announce) {
       setBusy(true);
@@ -254,12 +418,9 @@ export default function KnowledgeGraphPage() {
       });
   }, []);
 
-  /* What the Refresh button calls: the same fetch, but it reports it is working. */
   const refresh = useCallback(() => load(true), [load]);
 
-  /* Clear sent no body, so the backend rejected it with 400 and the page
-     refreshed unchanged -- a silent no-op that looked like a dead button.
-     The confirm flag is required precisely because this is destructive. */
+  /* Destructive, so it asks first; the backend requires {confirm: true}. */
   const clearMemory = useCallback(() => {
     if (!window.confirm('Delete all accumulated failure memory? This cannot be undone.')) return;
     setBusy(true);
@@ -282,15 +443,9 @@ export default function KnowledgeGraphPage() {
       });
   }, [refresh]);
 
-  /* Initial load. `false` skips the busy/error reset, so nothing is set
-     synchronously here -- every setState in load() happens inside a promise
-     callback, which is the subscribe-to-an-external-system pattern the rule
-     exists to allow. The rule cannot see through the guard, so it is silenced
-     with the reason rather than contorting correct code to satisfy it. */
-  // eslint-disable-next-line react-hooks/set-state-in-effect
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- state is only set in promise callbacks
   useEffect(() => { load(false); }, [load]);
 
-  /* Auto-refresh when backend learns something new */
   useEffect(() => {
     const off = on('learned', () => {
       setLastLearnedTs(Date.now());
@@ -303,270 +458,163 @@ export default function KnowledgeGraphPage() {
     return () => { off && off(); off2 && off2(); };
   }, [on, refresh]);
 
-  /* Derived data */
+  const nodes = useMemo(() => data?.nodes ?? [], [data]);
+  const edges = useMemo(() => data?.edges ?? [], [data]);
   const lessons = useMemo(() => data?.lessons ?? [], [data]);
-  const summary = data?.summary ?? {};
-  const allNodes = useMemo(() => data?.nodes ?? [], [data]);
-  const allEdges = useMemo(() => data?.edges ?? [], [data]);
-
-  const failures = useMemo(
-    () => allNodes.filter((n) => n.type === 'failure_mode').sort((a, b) => b.count - a.count),
-    [allNodes],
-  );
+  const runs = data?.summary?.runs ?? 0;
+  const failures = useMemo(() => nodes.filter((n) => n.type === 'failure_mode').sort((a, b) => b.count - a.count), [nodes]);
   const totalFailures = failures.reduce((s, f) => s + f.count, 0);
-  // Never open on the full hairball: default to the most frequent failure.
-  const focusId = picked && failures.some((f) => f.id === picked) ? picked : failures[0]?.id;
-  const focus = failures.find((f) => f.id === focusId);
-
-  const chain = useMemo(() => (focusId ? chainFor(focusId, allEdges) : null), [focusId, allEdges]);
-
-  const graph = useMemo(() => {
-    if (showAll || !chain) return { nodes: allNodes, edges: allEdges };
-    const keep = new Set([
-      `failure_mode:${focusId}`,
-      ...chain.tools.map((t) => `tool:${t}`),
-      ...chain.caps.map((c) => `capability:${c}`),
-      ...chain.goals.map((g) => `goal:${g}`),
-    ]);
-    return {
-      nodes: allNodes.filter((n) => keep.has(`${n.type}:${n.id}`)),
-      edges: [...chain.hits, ...chain.reaches, ...chain.gaps],
-    };
-  }, [showAll, chain, allNodes, allEdges, focusId]);
-
-  const pickFailure = useCallback((id) => { setPicked(id); setShowAll(false); }, []);
-
-  const reasoning = focus ? FAILURE_REASONING[focus.id] : null;
-  const focusLessons = focus ? lessonsFor(focus.id, lessons) : [];
-  const runsTotal = summary.runs ?? 0;
-  const topTools = chain ? [...chain.hits].sort((a, b) => b.count - a.count).slice(0, 3) : [];
+  const toolCount = nodes.filter((n) => n.type === 'tool').length;
+  const capCount = nodes.filter((n) => n.type === 'capability').length;
+  // Never open on nothing selected: default to the most frequent failure.
+  const focusKey = picked && nodes.some((n) => key(n) === picked) ? picked : (failures[0] ? key(failures[0]) : null);
 
   return (
     <div className="min-h-screen bg-[#050505] text-on-background font-body-md">
-      {/* ── Top bar ── */}
-      <header className="sticky top-0 z-50 flex flex-wrap items-center justify-between gap-3 px-margin-mobile md:px-margin-desktop py-4 bg-surface-container-lowest border-b border-outline-variant/20 backdrop-blur-md">
-        <div className="flex items-center gap-6">
-          <Link to="/" className="inline-flex min-h-11 items-center font-headline-lg text-[20px] font-extrabold text-on-background tracking-tighter hover:text-primary transition-colors">
-            SentinelMind
-          </Link>
-          <span className="hidden md:block font-label-sm text-[12px] text-on-surface-variant">/ Knowledge Graph</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          {lastLearnedTs && (
-            <span className="font-label-sm text-[12px] text-primary-container animate-pulse">● New learning detected</span>
-          )}
-          <div className="flex items-center gap-2">
-            <span className={`w-2 h-2 rounded-full ${connected ? 'bg-primary-container shadow-[0_0_6px_rgba(0,255,102,0.5)]' : 'bg-on-surface-variant/30'}`} />
-            <span className="font-label-sm text-[12px] text-on-surface-variant">{connected ? 'Live' : 'Disconnected'}</span>
+      <header className="sticky top-0 z-50 bg-surface-container-lowest/95 border-b border-outline-variant/30 backdrop-blur-md">
+        <div className="max-w-container-max mx-auto flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-margin-mobile md:px-margin-desktop py-2">
+          <div className="flex items-center gap-4">
+            <Link to="/" className="inline-flex min-h-11 items-center font-headline-lg text-[20px] font-extrabold text-on-background tracking-tight hover:text-primary-container transition-colors">
+              SentinelMind
+            </Link>
+            <span className="flex items-center gap-2 text-[14px] text-on-surface-variant" role="status">
+              <span className="relative flex w-2 h-2" aria-hidden="true">
+                {connected && <span className="absolute inset-0 rounded-full bg-primary-container opacity-60 animate-ping" />}
+                <span className={`relative w-2 h-2 rounded-full ${connected ? 'bg-primary-container' : 'bg-on-surface-variant/50'}`} />
+              </span>
+              {lastLearnedTs ? 'Learning' : connected ? 'Live' : 'Disconnected'}
+            </span>
+            {error && <span className="text-[13px] text-error max-w-[260px] truncate" title={error}>{error}</span>}
           </div>
-          {error && (
-            <span className="font-label-sm text-[12px] text-error max-w-[280px] truncate" title={error}>⚠ {error}</span>
-          )}
-          {!error && lastUpdated && (
-            <span className="font-label-sm text-[12px] text-on-surface-variant">updated {lastUpdated.toLocaleTimeString()}</span>
-          )}
-          <button
-            onClick={() => refresh()}
-            disabled={busy}
-            className="inline-flex min-h-11 items-center px-3 bg-surface-container-high/50 border border-outline-variant/20 rounded-lg font-label-sm text-[12px] text-on-surface hover:bg-surface-variant transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {busy ? 'Refreshing…' : 'Refresh'}
-          </button>
-          <button
-            onClick={clearMemory}
-            disabled={busy}
-            className="inline-flex min-h-11 items-center px-3 bg-error/10 border border-error/20 rounded-lg font-label-sm text-[12px] text-error hover:bg-error/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Clear Memory
-          </button>
-          <Link to="/dashboard" className="inline-flex min-h-11 items-center px-3 border border-outline-variant/30 rounded-lg font-label-sm text-[12px] text-on-surface-variant hover:text-primary hover:border-primary-container/30 transition-colors">
-            ← Dashboard
-          </Link>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={refresh} disabled={busy} title={lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : undefined} className="inline-flex min-h-11 items-center rounded-md border border-outline-variant/50 px-3 text-[14px] text-on-background hover:bg-surface-container-high transition-colors disabled:opacity-40">
+              {busy ? 'Refreshing…' : 'Refresh'}
+            </button>
+            <button type="button" onClick={clearMemory} disabled={busy} className="inline-flex min-h-11 items-center rounded-md border border-error/40 px-3 text-[14px] text-error hover:bg-error/10 transition-colors disabled:opacity-40">
+              Clear memory
+            </button>
+            <Link to="/dashboard" className="inline-flex min-h-11 items-center rounded-md border border-primary-container/40 px-3 text-[14px] text-primary-container hover:bg-primary-container/10 transition-colors">
+              Dashboard
+            </Link>
+          </div>
         </div>
       </header>
 
-      <main className="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-8 flex flex-col gap-6">
-        <div>
-          <h1 className="font-headline-lg text-[24px] text-on-background">How this agent fails, and why</h1>
-          <p className="font-body-md text-[16px] md:text-[14px] text-on-surface-variant mt-1 max-w-[760px]">
-            Every WARN and ANOMALY verdict is remembered here across {runsTotal} run{runsTotal === 1 ? '' : 's'}.
-            Pick a failure mode to see the tools that hit it, what they were reaching for, the reasoning behind
-            the pattern, and the lesson fed back to the agent.
-          </p>
+      <main className="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-6 md:py-8 flex flex-col gap-5">
+        <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-3">
+          <div>
+            <h1 className="font-headline-lg text-[28px] md:text-[34px] font-bold leading-tight text-on-background">Failure memory</h1>
+            <p className="mt-1 text-[16px] text-on-surface-variant">Everything this agent has got wrong, and what it is told because of it.</p>
+          </div>
+          <dl className="flex gap-6 md:gap-8">
+            {[[totalFailures, 'failures'], [toolCount, 'tools'], [capCount, 'missing capabilities'], [runs, 'runs']].map(([v, l]) => (
+              <div key={l}>
+                <dt className="sr-only">{l}</dt>
+                <dd className="font-headline-lg text-[24px] font-bold tabular-nums leading-none text-on-background">{v}</dd>
+                <dd className="mt-1 text-[13px] text-on-surface-variant">{l}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
 
         {loading ? (
-          // Holds the page's height while loading, so the footer does not jump
-          // when the data lands (Lighthouse measured a 0.91 layout shift).
-          <p className="min-h-[100vh] py-32 text-center text-[16px] md:text-[15px] text-on-surface-variant">Loading failure memory…</p>
+          <p className="min-h-[100vh] py-32 text-center text-[15px] text-on-surface-variant">Loading failure memory…</p>
         ) : failures.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-32 gap-3 text-on-surface-variant">
-            <p className="font-label-sm text-[13px]">No failures remembered yet</p>
-            <p className="font-body-md text-[16px] md:text-[14px] text-center max-w-[400px] text-on-surface-variant">
-              Run <code className="font-label-sm text-primary-container">python backend/real_agent.py</code> or{' '}
-              <code className="font-label-sm text-primary-container">demo_agent.py</code>. WARN and ANOMALY verdicts are stored here.
+          <div className="flex min-h-[420px] flex-col items-center justify-center gap-3 rounded-xl border border-outline-variant/40 bg-surface-container-low text-center px-6">
+            <p className="text-[18px] text-on-background">Nothing remembered yet</p>
+            <p className="max-w-[420px] text-[15px] text-on-surface-variant">
+              Run <code className="font-label-sm text-primary-container">python backend/real_agent.py</code>. Every warning and anomaly the judge finds lands here, live.
             </p>
           </div>
         ) : (
           <>
-            {/* ── Failure modes: the general view ── */}
-            <div role="tablist" aria-label="Failure modes" className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            {/* Failure chips: the keyboard- and screen-reader-friendly way into the graph */}
+            <div role="tablist" aria-label="Failure modes" className="flex flex-wrap gap-2">
               {failures.map((f) => {
-                const active = f.id === focusId && !showAll;
-                const share = totalFailures ? Math.round((f.count / totalFailures) * 100) : 0;
-                const toolCount = allEdges.filter((e) => e.relation === 'exhibits' && e.dst_id === f.id).length;
+                const active = focusKey === key(f);
                 return (
                   <button
                     key={f.id}
+                    type="button"
                     role="tab"
                     aria-selected={active}
-                    onClick={() => pickFailure(f.id)}
-                    className={`text-left p-4 rounded-lg border transition-colors ${
-                      active
-                        ? 'bg-error/10 border-error/50'
-                        : 'bg-surface-container-low border-outline-variant/20 hover:border-outline-variant/50'
+                    onClick={() => setPicked(key(f))}
+                    className={`inline-flex min-h-11 items-center gap-2 rounded-full border px-4 text-[14px] transition-colors ${
+                      active ? 'border-error/70 bg-error/10 text-on-background' : 'border-outline-variant/50 text-on-surface-variant hover:text-on-background hover:border-outline-variant'
                     }`}
                   >
-                    <span className="block font-body-md text-[16px] md:text-[14px] text-on-background">{FAILURE_REASONING[f.id]?.title ?? f.id}</span>
-                    <span className="block mt-2 font-headline-lg text-[22px] tabular-nums text-on-background">{f.count}</span>
-                    <span className="block font-label-sm text-[12px] text-on-surface-variant">
-                      {share}% of failures · {toolCount} tool{toolCount === 1 ? '' : 's'}
-                    </span>
-                    <span className="mt-3 block h-1 rounded bg-outline-variant/20 overflow-hidden">
-                      <span className="block h-full bg-error/70" style={{ width: `${share}%` }} />
-                    </span>
+                    {FAILURE[f.id]?.title ?? f.id}
+                    <span className="tabular-nums text-on-surface-variant">{f.count}</span>
                   </button>
                 );
               })}
             </div>
 
-            <div className="flex flex-col gap-6">
-              {/* ── Chain graph ── */}
-              <Panel
-                title={showAll ? 'All remembered failures' : `${reasoning?.title ?? focusId}: where it comes from`}
-                aside={
-                  <button
-                    onClick={() => setShowAll((v) => !v)}
-                    className="inline-flex min-h-11 items-center px-3 border border-outline-variant/30 rounded-lg font-label-sm text-[12px] text-on-surface-variant hover:text-on-surface transition-colors"
-                  >
-                    {showAll ? 'Focus on one failure' : 'Show everything'}
-                  </button>
-                }
-              >
-                {!showAll && chain && <div className="md:hidden"><ChainList chain={chain} /></div>}
-                <div className={`${showAll ? 'flex' : 'hidden md:flex'} flex-wrap gap-x-5 gap-y-1 px-5 pt-4 font-label-sm text-[12px] text-on-surface-variant`}>
-                  {[['failure_mode', 'Failure'], ['tool', 'Tool that hit it'], ['capability', 'Capability it reached for'], ['goal', 'Goal it was missing in']].map(([t, label]) => (
-                    <span key={t} className="flex items-center gap-2">
-                      <span className="w-3 h-3 rounded-sm border" style={{ background: STYLE[t].background, borderColor: STYLE[t].border }} />
-                      {label}
-                    </span>
-                  ))}
-                  <span className="text-on-surface-variant">read left to right · thicker line = more often</span>
+            <section className="rounded-xl border border-outline-variant/40 bg-surface-container-low overflow-hidden">
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-5 pt-4 text-[13px] text-on-surface-variant">
+                  <span className="inline-flex items-center gap-1.5"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="5" fill="#2a1416" stroke="#f87171" strokeWidth="1.5" /></svg>Failure</span>
+                  <span className="inline-flex items-center gap-1.5"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4.5" fill="#121815" stroke="#4a7a5a" strokeWidth="1.5" /></svg>Tool</span>
+                  <span className="inline-flex items-center gap-1.5"><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4.5" fill="#121815" stroke="#4a7a5a" strokeWidth="1.5" strokeDasharray="2.5 2" /></svg>Invented tool</span>
+                  <span className="inline-flex items-center gap-1.5"><svg width="12" height="12" aria-hidden="true"><rect x="2.5" y="2.5" width="7" height="7" transform="rotate(45 6 6)" fill="#241c0d" stroke="#e0a43a" strokeWidth="1.5" /></svg>Missing capability</span>
+                  <span className="ml-auto hidden md:inline">Hover to trace a chain · click to inspect</span>
                 </div>
-                {(wide || showAll) && (
-                  <div className={showAll ? '' : 'hidden md:block'}>
-                    <ChainGraph nodes={graph.nodes} edges={graph.edges} onPickFailure={pickFailure} />
-                  </div>
-                )}
-                {!showAll && chain && chain.caps.length === 0 && (
-                  <p className="px-5 pb-4 font-body-md text-[16px] md:text-[13px] text-on-surface-variant">
-                    No capability gap behind this one: these tools exist, so the failure is in how they were used, not in what was missing.
-                  </p>
-                )}
-                {showAll && (
-                  <p className="px-5 pb-4 font-body-md text-[16px] md:text-[13px] text-on-surface-variant">Click any red failure node to focus on it.</p>
-                )}
-              </Panel>
+                <MemoryGraph nodes={nodes} edges={edges} focus={focusKey} onFocus={setPicked} />
+            </section>
 
-              {/* ── Reasoning ── */}
-              {focus && reasoning && (
-                <Panel title="Reasoning" aside={<span className="font-label-sm text-[12px] text-error">{reasoning.title}</span>}>
-                  <div className="px-5 py-5 grid grid-cols-1 lg:grid-cols-2 gap-x-10 gap-y-5 font-body-md text-[16px] md:text-[14px] leading-relaxed">
-                    <div>
-                      <h3 className="font-label-sm text-[12px] text-on-surface-variant mb-1">What it is</h3>
-                      <p className="text-on-surface">{reasoning.what}</p>
-                    </div>
-                    <div>
-                      <h3 className="font-label-sm text-[12px] text-on-surface-variant mb-1">Why agents do this</h3>
-                      <p className="text-on-surface-variant">{reasoning.why}</p>
-                    </div>
-                    <div>
-                      <h3 className="font-label-sm text-[12px] text-on-surface-variant mb-1">Why it matters</h3>
-                      <p className="text-on-surface-variant">{reasoning.impact}</p>
-                    </div>
-                    <div>
-                      <h3 className="font-label-sm text-[12px] text-on-surface-variant mb-1">How widespread it is here</h3>
-                      <p className="text-on-surface-variant">
-                        {focus.count} occurrence{focus.count === 1 ? '' : 's'} across {chain.tools.length} tool{chain.tools.length === 1 ? '' : 's'}
-                        {/* seen_in_runs only exists for runs recorded after it was added, so it is a floor, not "N of all runs". */}
-                        {focus.seen_in_runs ? `, seen in ${focus.seen_in_runs.length} run${focus.seen_in_runs.length === 1 ? '' : 's'} since per-run tracking began` : ''}
-                        {topTools.length > 0 && <> — most often <span className="text-on-surface">{topTools.map((t) => `${t.src_id} (×${t.count})`).join(', ')}</span></>}.
-                      </p>
-                    </div>
-                    <div>
-                      <h3 className="font-label-sm text-[12px] text-on-surface-variant mb-1">What the judge said</h3>
-                      {focus.evidence?.length ? (
-                        <ul className="flex flex-col gap-2">
-                          {[...focus.evidence].reverse().map((ev, i) => (
-                            <li key={i} className="border-l-2 border-outline-variant/40 pl-3">
-                              <span className="font-label-sm text-[12px] text-on-surface-variant">{ev.status} · {ev.tool}</span>
-                              <p className="text-on-surface-variant text-[16px] md:text-[13px]">“{ev.explanation}”</p>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <p className="text-on-surface-variant text-[16px] md:text-[13px]">Explanations are kept for failures recorded from now on; this one predates that.</p>
-                      )}
-                    </div>
-                    <div>
-                      <h3 className="font-label-sm text-[12px] text-on-surface-variant mb-1">What fixes it</h3>
-                      <p className="text-on-surface-variant">{reasoning.remedy}</p>
-                    </div>
-                    {focusLessons.length > 0 && (
-                      <div className="lg:col-span-2 rounded-lg bg-primary-container/5 border border-primary-container/20 p-3">
-                        <h3 className="font-label-sm text-[12px] text-primary-container mb-1">Lesson fed back to the agent</h3>
-                        {focusLessons.map((l, i) => <p key={i} className="text-on-surface text-[16px] md:text-[13px] mt-1">{l}</p>)}
-                      </div>
-                    )}
-                  </div>
-                </Panel>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+              <aside className="rounded-xl border border-outline-variant/40 bg-surface-container-low p-5" aria-live="polite">
+                <FocusCard focusKey={focusKey} nodes={nodes} edges={edges} lessons={lessons} totalFailures={totalFailures} runs={runs} />
+              </aside>
+            {/* What the agent is told -- headlines; the exact text on click */}
+            <section className="rounded-xl border border-outline-variant/40 bg-surface-container-low p-5">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h2 className="font-headline-lg text-[19px] text-on-background">What the agent is told next run</h2>
+                <span className="text-[13px] text-on-surface-variant">with <code className="font-label-sm">real_agent.py --learn</code> · click one for the exact wording</span>
+              </div>
+              {lessons.length === 0 ? (
+                <p className="mt-3 text-[15px] text-on-surface-variant">No lessons yet.</p>
+              ) : (
+                <ul className="mt-4 grid grid-cols-1 gap-2.5">
+                  {lessons.map((l, i) => {
+                    const h = lessonHeadline(l);
+                    const open = openLesson === i;
+                    return (
+                      <li key={i}>
+                        <button
+                          type="button"
+                          aria-expanded={open}
+                          onClick={() => setOpenLesson(open ? null : i)}
+                          className={`w-full text-left rounded-lg border px-4 py-3 transition-colors ${open ? 'border-primary-container/50 bg-primary-container/[0.05]' : 'border-outline-variant/40 hover:border-outline-variant'}`}
+                          style={{ boxShadow: `inset 3px 0 0 ${h.kind === 'infinite_loop' ? '#fbbf24' : '#e0a43a'}` }}
+                        >
+                          <span className="flex items-baseline justify-between gap-3">
+                            <span className="text-[15px] font-semibold text-on-background">{h.head}</span>
+                            {h.n && <span className="shrink-0 text-[13px] tabular-nums text-on-surface-variant">{h.n}</span>}
+                          </span>
+                          {open && <span className="mt-2 block text-[14px] leading-snug text-on-surface-variant">{l}</span>}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
               )}
+            </section>
             </div>
 
-            {/* ── Everything the agent is told ── */}
-            <Panel
-              title="Lessons injected into the agent"
-              aside={<span className="font-label-sm text-[12px] text-on-surface-variant">real_agent.py --learn</span>}
-            >
-              {lessons.length === 0 ? (
-                <p className="px-5 py-6 font-body-md text-[16px] md:text-[13px] text-on-surface-variant">No lessons yet.</p>
-              ) : (
-                <ol className="divide-y divide-outline-variant/10">
-                  {lessons.map((l, i) => (
-                    <li key={i} className="px-5 py-3 flex gap-4 font-body-md text-[16px] md:text-[14px] text-on-surface-variant leading-relaxed">
-                      <span className="font-label-sm text-[12px] text-primary-container pt-0.5">{i + 1}</span>
-                      <span>{l}</span>
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </Panel>
-
-            {/* ── Raw data, for anyone checking the claims above ── */}
-            <details className="bg-surface-container-low border border-outline-variant/20 rounded-xl">
-              <summary className="px-5 py-3.5 cursor-pointer font-headline-lg text-[17px] text-on-background">
-                Raw graph data <span className="font-label-sm text-[12px] text-on-surface-variant">· {summary.nodes ?? 0} nodes, {summary.edges ?? 0} edges</span>
+            <details className="rounded-xl border border-outline-variant/40 bg-surface-container-low">
+              <summary className="px-5 min-h-11 flex items-center cursor-pointer text-[15px] text-on-surface-variant hover:text-on-background">
+                Raw graph data · {nodes.length} nodes, {edges.length} edges
               </summary>
-              <div className="max-h-80 overflow-auto border-t border-outline-variant/15">
+              <div className="max-h-80 overflow-auto border-t border-outline-variant/30">
                 <table className="w-full font-label-sm text-[12px] text-left">
-                  <thead className="text-on-surface-variant uppercase text-[12px] tracking-widest">
+                  <thead className="text-on-surface-variant">
                     <tr><th className="px-5 py-2">From</th><th className="py-2">Relation</th><th className="py-2">To</th><th className="px-5 py-2 text-right">Count</th></tr>
                   </thead>
                   <tbody>
-                    {allEdges.map((e, i) => (
-                      <tr key={i} className="border-t border-outline-variant/10 text-on-surface-variant">
+                    {edges.map((e, i) => (
+                      <tr key={i} className="border-t border-outline-variant/20 text-on-surface-variant">
                         <td className="px-5 py-2 break-all">{e.src_id}</td>
-                        <td className="py-2 text-on-surface-variant">{e.relation}</td>
+                        <td className="py-2">{e.relation}</td>
                         <td className="py-2 break-all">{e.dst_id}</td>
                         <td className="px-5 py-2 text-right tabular-nums">{e.count}</td>
                       </tr>
@@ -577,10 +625,6 @@ export default function KnowledgeGraphPage() {
             </details>
           </>
         )}
-
-        <footer className="pt-4 text-center font-label-sm text-[12px] text-on-surface-variant">
-          Failure memory across runs · retrieval-augmented prompting, not training
-        </footer>
       </main>
     </div>
   );

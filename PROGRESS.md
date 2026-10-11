@@ -530,3 +530,18 @@ draws once session + verdicts are in, instead of drawing empty and reflowing).
   from 1024px, not 1280px), compact one-line feed with click-to-expand and Expand all, and
   **Replay run** — once every step has a verdict, plays the run back step by step through the
   timeline, tiles, charts and feed. Client-side only; nothing is re-judged.
+
+### 2026-10-12 — personal project; knowledge graph drawn as a graph
+
+- Removed the hackathon branding (FRONTIER / Codecrash / VIT Chennai) from the landing and
+  dashboard footers and the top of the README; SentinelMind is now a personal project.
+- **Failure memory page rebuilt graph-first.** The previous version explained each failure in
+  four paragraphs. Now the graph is the page: the agent at the centre, failure modes on the
+  inner ring (sized by count, with spokes), the tools that hit them (dashed = invented) and the
+  capabilities they reached for on the outer rings. Deterministic layout, curved links, tool
+  names drawn radially so neighbours never overlap. Hover lights a chain; click opens a short
+  card — count, share, one line of why, the latest verdict, the lesson as a headline — with the
+  full reasoning behind "Why does this happen?". Lessons show as headlines ("Can't issue refunds
+  · 6 attempts") that expand to the exact wording. Phones get wider rings and labels on tap.
+- Plain SVG: vis-network removed entirely (−169 KB gzipped). Graph page 7.7 KB gzipped.
+  Lighthouse: desktop 97, mobile 92, accessibility 100.
