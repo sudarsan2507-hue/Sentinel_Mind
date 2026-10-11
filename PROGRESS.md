@@ -526,3 +526,7 @@ vis-network):
 
 Lighthouse dashboard: desktop 99, mobile 90, accessibility 100, layout shift 0 (the page now
 draws once session + verdicts are in, instead of drawing empty and reflowing).
+- **View options (follow-up):** Split / Stacked layout switch (remembered per browser; split now
+  from 1024px, not 1280px), compact one-line feed with click-to-expand and Expand all, and
+  **Replay run** — once every step has a verdict, plays the run back step by step through the
+  timeline, tiles, charts and feed. Client-side only; nothing is re-judged.

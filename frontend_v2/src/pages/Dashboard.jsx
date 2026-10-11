@@ -55,6 +55,15 @@ export default function Dashboard() {
   const [model, setModel] = useState('');
   const [selected, setSelected] = useState(null);
   const [ready, setReady] = useState(false);
+  // View options. Layout is remembered per browser; storage can be unavailable
+  // (private mode), so reads and writes are guarded and the default still works.
+  const [layout, setLayout] = useState(() => {
+    try { return localStorage.getItem('sm.dashLayout') || 'split'; } catch { return 'split'; }
+  });
+  const [expandAll, setExpandAll] = useState(false);
+  // Replay: re-plays the finished run step by step in every view. Client-side
+  // only -- the verdicts are already here, nothing is re-judged or re-sent.
+  const [replayN, setReplayN] = useState(null);
   const feedRef = useRef(null);
 
   useEffect(() => {
@@ -97,21 +106,38 @@ export default function Dashboard() {
     ]).then(() => setReady(true));
   }, []);
 
+  const chooseLayout = (next) => {
+    setLayout(next);
+    try { localStorage.setItem('sm.dashLayout', next); } catch { /* storage unavailable: still switches */ }
+  };
+
+  useEffect(() => {
+    if (replayN == null) return undefined;
+    if (replayN >= steps.length) {
+      const done = setTimeout(() => setReplayN(null), 1200);
+      return () => clearTimeout(done);
+    }
+    const t = setTimeout(() => setReplayN((n) => n + 1), 550);
+    return () => clearTimeout(t);
+  }, [replayN, steps.length]);
+
   /* Selecting a step anywhere scrolls the feed to it. */
   useEffect(() => {
     if (!selected) return;
     feedRef.current?.querySelector(`[data-step="${CSS.escape(selected)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [selected]);
 
-  /* Derived */
-  const judged = steps.filter((s) => s.status !== 'PENDING');
+  /* Derived -- from what is visible, so a replay drives every view at once. */
+  const visible = useMemo(() => (replayN == null ? steps : steps.slice(0, replayN)), [steps, replayN]);
+  const judged = visible.filter((s) => s.status !== 'PENDING');
   const counts = judged.reduce((a, s) => ({ ...a, [s.status]: (a[s.status] || 0) + 1 }), { OK: 0, WARN: 0, ANOMALY: 0 });
   const latencies = judged.map((s) => s.latency).filter(Number.isFinite);
   const p50 = quantile(latencies, 0.5);
   const p95 = quantile(latencies, 0.95);
   const anomalyRate = judged.length ? Math.round((counts.ANOMALY / judged.length) * 100) : null;
-  const streak = useMemo(() => longestStreak(steps), [steps]);
-  const pending = steps.length - judged.length;
+  const streak = useMemo(() => longestStreak(visible), [visible]);
+  const pending = visible.length - judged.length;
+  const runDone = steps.length > 1 && steps.every((s) => s.status !== 'PENDING');
   const latestAnomaly = [...judged].reverse().find((s) => s.status === 'ANOMALY');
   const stepNo = useMemo(() => new Map(steps.map((s, i) => [s.id, i + 1])), [steps]);
   const feed = [...judged].reverse();
@@ -209,8 +235,44 @@ export default function Dashboard() {
           />
         </div>
 
+        {/* ── View controls ── */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div role="radiogroup" aria-label="Layout" className="inline-flex rounded-lg border border-outline-variant/50 p-1 bg-surface-container-low">
+            {[['split', 'Split'], ['stacked', 'Stacked']].map(([v, label]) => (
+              <button
+                key={v}
+                type="button"
+                role="radio"
+                aria-checked={layout === v}
+                onClick={() => chooseLayout(v)}
+                className={`min-h-11 md:min-h-9 rounded-md px-4 text-[14px] transition-colors ${
+                  layout === v ? 'bg-surface-container-high text-on-background' : 'text-on-surface-variant hover:text-on-background'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {replayN != null ? (
+            <div className="flex items-center gap-3 text-[14px]">
+              <span className="tabular-nums text-on-surface-variant" aria-live="polite">Replaying step {Math.min(replayN, steps.length)} of {steps.length}</span>
+              <button type="button" onClick={() => setReplayN(null)} className={headerButton}>Stop</button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              disabled={!runDone}
+              onClick={() => { setSelected(null); setReplayN(1); }}
+              title={runDone ? 'Play this run back step by step' : 'Available once every step has a verdict'}
+              className={`${headerButton} disabled:opacity-40 disabled:cursor-not-allowed`}
+            >
+              Replay run
+            </button>
+          )}
+        </div>
+
         {/* ── Timeline + charts | feed ── */}
-        <div className="grid grid-cols-1 xl:grid-cols-[1.55fr_1fr] gap-5 items-start">
+        <div className={`grid grid-cols-1 gap-5 items-start ${layout === 'split' ? 'lg:grid-cols-[1.45fr_1fr]' : ''}`}>
           <div className="flex flex-col gap-5 min-w-0">
             <Panel
               title="Run timeline"
@@ -218,14 +280,14 @@ export default function Dashboard() {
               bodyClass="px-3 pb-4 pt-2"
             >
               <p className="px-2 pb-2 text-[13px] text-on-surface-variant">One lane per tool, one column per step. A lane lighting up again and again is a loop.</p>
-              <RunTimeline steps={steps} selected={selected} onSelect={setSelected} />
+              <RunTimeline steps={visible} selected={selected} onSelect={setSelected} />
             </Panel>
             <Panel title="Verdict latency per step" aside={<span className="text-[13px] text-on-surface-variant">time from trace to verdict; colour is the verdict</span>}>
-              <LatencyChart steps={steps} selected={selected} onSelect={setSelected} />
+              <LatencyChart steps={visible} selected={selected} onSelect={setSelected} />
             </Panel>
             <Panel title="Verdicts by tool" aside={<StatusLegend />}>
               <ToolBreakdown
-                steps={steps}
+                steps={visible}
                 onPickTool={(tool) => {
                   const last = [...judged].reverse().find((s) => s.tool === tool);
                   if (last) setSelected(last.id);
@@ -237,11 +299,20 @@ export default function Dashboard() {
           {/* Verdict feed */}
           <Panel
             title="Verdict feed"
-            aside={<span className="text-[13px] text-on-surface-variant">newest first</span>}
-            className="xl:sticky xl:top-20"
+            aside={(
+              <button
+                type="button"
+                onClick={() => setExpandAll((v) => !v)}
+                aria-pressed={expandAll}
+                className="min-h-11 md:min-h-0 text-[13px] text-on-surface-variant underline underline-offset-4 decoration-outline-variant hover:text-on-background"
+              >
+                {expandAll ? 'Collapse all' : 'Expand all'}
+              </button>
+            )}
+            className={layout === 'split' ? 'lg:sticky lg:top-20' : ''}
             bodyClass="pt-3"
           >
-            <ol ref={feedRef} className="min-h-[320px] max-h-[560px] xl:max-h-[calc(100vh-11rem)] overflow-y-auto overscroll-contain px-3 pb-3 flex flex-col gap-2">
+            <ol ref={feedRef} className={`min-h-[320px] overflow-y-auto ${layout === 'split' ? 'max-h-[560px] lg:max-h-[calc(100vh-11rem)]' : 'max-h-[640px]'}  overscroll-contain px-3 pb-3 flex flex-col gap-2`}>
               {feed.length === 0 && (
                 <li className="px-3 py-10 text-center text-[15px] text-on-surface-variant">
                   Run <code className="font-label-sm text-primary-container">python backend/real_agent.py</code> and each verdict lands here.
@@ -249,12 +320,16 @@ export default function Dashboard() {
               )}
               {feed.map((s) => {
                 const sel = selected === s.id;
+                // Compact by default: one line per verdict. Selecting a step (here
+                // or in any chart) or "Expand all" shows the full reasoning.
+                const open = sel || expandAll;
                 return (
                   <li key={s.id} data-step={s.id} className="feed-item">
                     <button
                       type="button"
                       onClick={() => setSelected(sel ? null : s.id)}
-                      className={`w-full text-left rounded-lg border px-4 py-3 transition-colors ${
+                      aria-expanded={open}
+                      className={`w-full text-left rounded-lg border px-4 ${open ? 'py-3' : 'py-2.5'} transition-colors ${
                         sel ? 'border-on-surface-variant bg-surface-container-high' : 'border-outline-variant/30 hover:border-outline-variant/70'
                       }`}
                       style={{ boxShadow: `inset 3px 0 0 ${STATUS[s.status].color}` }}
@@ -267,14 +342,16 @@ export default function Dashboard() {
                         <span className="font-label-sm text-[12px] text-primary-container break-all">{s.tool}</span>
                         <span className="ml-auto text-[12px] tabular-nums text-on-surface-variant">step {stepNo.get(s.id)} · {fmtS(s.latency)}</span>
                       </span>
-                      <span className={`mt-1.5 block text-[15px] md:text-[14px] leading-snug ${s.degraded ? 'italic text-on-surface-variant' : 'text-on-surface-variant'}`}>
+                      <span className={`mt-1 text-[15px] md:text-[14px] leading-snug ${open ? 'block' : 'line-clamp-1'} ${s.degraded ? 'italic text-on-surface-variant' : 'text-on-surface-variant'}`}>
                         {s.text}
                       </span>
-                      <span className="mt-2 flex items-center gap-3">
-                        <Confidence value={s.confidence} />
-                        {s.degraded && <span className="text-[12px] text-amber-300">judge unavailable</span>}
-                        {s.replayed && <span className="text-[12px] text-on-surface-variant">replayed</span>}
-                      </span>
+                      {open && (
+                        <span className="mt-2 flex items-center gap-3">
+                          <Confidence value={s.confidence} />
+                          {s.degraded && <span className="text-[12px] text-amber-300">judge unavailable</span>}
+                          {s.replayed && <span className="text-[12px] text-on-surface-variant">replayed</span>}
+                        </span>
+                      )}
                     </button>
                   </li>
                 );
