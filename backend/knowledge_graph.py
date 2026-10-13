@@ -53,6 +53,10 @@ INFINITE_LOOP = "infinite_loop"
 GOAL_DRIFT = "goal_drift"
 EXCEPTION = "exception"
 INEFFICIENT = "inefficient_reasoning"
+# A real, registered tool used against the goal or a policy -- the kind of step
+# guard mode stops before it runs (an out-of-policy refund, a denied deletion).
+UNSAFE_ACTION = "unsafe_action"
+_UNSAFE_RULES = {"judge", "approval_denied", "approval_timeout", "unverified", "unreachable"}
 
 # Returned when no keyword matches. Deliberately a sentinel rather than a guess:
 # inventing a capability name for an unmatched tool would put a fact in the
@@ -95,6 +99,10 @@ def classify_failure(event: dict, verdict: dict, known_tools: list[str]) -> str:
     # Fact: the tool is not in the registry.
     if tool and known_tools and tool not in known_tools:
         return HALLUCINATED_TOOL
+
+    # The guard stopped a registered tool because using it was wrong here.
+    if verdict.get("rule") in _UNSAFE_RULES:
+        return UNSAFE_ACTION
 
     # The meta-agent is told to trust the deterministic repeat signal, so its
     # loop language is reliable here -- except on model calls. The agent plans
@@ -245,7 +253,8 @@ class KnowledgeGraph:
             # exhibit more than one. An unregistered tool that also raised is
             # both a hallucination and an exception; recording only the winner
             # loses a fact the graph is meant to hold.
-            if event.get("error") and failure != EXCEPTION:
+            # A blocked step "errored" only because it was stopped -- not an exception.
+            if event.get("error") and failure != EXCEPTION and not verdict.get("blocked"):
                 also_key = self._touch("failure_mode", EXCEPTION)
                 self._edges[(tool_key, "exhibits", also_key)] += 1
                 self._note_evidence(also_key, tool, verdict)
@@ -307,6 +316,13 @@ class KnowledgeGraph:
                 totals[src[1]] += count
         return sorted(totals.items(), key=lambda kv: -kv[1])
 
+    def _unsafe_tools(self) -> list[tuple[str, int]]:
+        totals: dict[str, int] = defaultdict(int)
+        for (src, rel, dst), count in self._edges.items():
+            if rel == "exhibits" and dst == ("failure_mode", UNSAFE_ACTION):
+                totals[src[1]] += count
+        return sorted(totals.items(), key=lambda kv: -kv[1])
+
     def _invented_names(self, capability: str, limit: int = 3) -> list[str]:
         names = [
             src[1]
@@ -335,6 +351,7 @@ class KnowledgeGraph:
         with self._lock:
             missing = self._missing_capabilities()
             looping = self._looping_tools()
+            unsafe = self._unsafe_tools()
             runs = self._runs
 
         out: list[str] = []
@@ -365,6 +382,13 @@ class KnowledgeGraph:
                     f"{article} {noun} for it was invented and failed{example_text}. Do not try "
                     f"again -- state plainly in your final answer that this action requires a human."
                 )
+
+        for tool, count in unsafe:
+            out.append(
+                f"'{tool}' was stopped {count} time(s) before it ran because using it went "
+                f"against the goal or a policy you had already found. Before calling it, check "
+                f"those rules; if they do not allow it, tell the user instead."
+            )
 
         for tool, count in looping:
             out.append(
