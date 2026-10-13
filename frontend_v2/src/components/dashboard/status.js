@@ -4,6 +4,9 @@ export const STATUS = {
   OK: { color: '#00e55b', label: 'OK' },
   WARN: { color: '#fbbf24', label: 'Warn' },
   ANOMALY: { color: '#f87171', label: 'Anomaly' },
+  // Stopped by guard mode before it ran. Blue and a square: it is the one
+  // status that means "this did not happen".
+  BLOCKED: { color: '#60a5fa', label: 'Blocked' },
   PENDING: { color: '#5b6470', label: 'Judging' },
 };
 

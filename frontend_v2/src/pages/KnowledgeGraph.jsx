@@ -32,6 +32,12 @@ const FAILURE = {
     why: 'Usually a downstream effect: an invented endpoint answers 403. Agents also tend to carry on after an error, because the next step is generated either way.',
     fix: 'Surface the error in the answer instead of retrying blindly; check which other failure the same tools show.',
   },
+  unsafe_action: {
+    title: 'Unsafe action',
+    short: 'Used a real tool in a way the rules did not allow — stopped before it ran.',
+    why: 'Pressure in the prompt ("never tell a customer no") outweighs a policy the agent read a few steps earlier. The model optimises for the instruction it was given, not for the rule it found.',
+    fix: 'Check side-effect tools against the goal and the facts gathered before they run (guard mode), and send the reason back so the agent can change course.',
+  },
   inefficient_reasoning: {
     title: 'Sloppy step',
     short: 'Worked, but slow, oddly shaped or only loosely on topic.',
@@ -46,6 +52,8 @@ function lessonHeadline(text) {
   if (m) return { head: `Can't ${m[1]}`, n: `${m[2]} attempt${m[2] === '1' ? '' : 's'}`, kind: 'hallucinated_tool' };
   m = text.match(/Calling '(.+?)' over and over has been flagged as a loop (\d+)/);
   if (m) return { head: `Loops on ${m[1]}`, n: `${m[2]}×`, kind: 'infinite_loop' };
+  m = text.match(/'(.+?)' was stopped (\d+) time/);
+  if (m) return { head: `Stopped: ${m[1]}`, n: `${m[2]}×`, kind: 'unsafe_action' };
   m = text.match(/NOT in your tool registry and calling them has failed (\d+)/);
   if (m) return { head: 'Unregistered tools', n: `${m[1]}×`, kind: 'hallucinated_tool' };
   return { head: text.split('.')[0], n: '', kind: null };

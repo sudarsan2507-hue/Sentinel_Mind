@@ -34,6 +34,19 @@ function longestStreak(steps) {
   return best;
 }
 
+
+// Why a step was stopped, in words.
+const RULE_LABEL = {
+  unregistered: 'not a real tool',
+  repeat: 'repeat call',
+  judge: 'judged unsafe before it ran',
+  unverified: 'could not be verified',
+  unreachable: 'guard unreachable',
+  approval_denied: 'human said no',
+  approval_timeout: 'no human approval',
+  circuit_breaker: 'run halted',
+};
+
 const fromEntry = (e) => ({
   id: e.event.id,
   tool: e.event.tool,
@@ -44,6 +57,8 @@ const fromEntry = (e) => ({
   confidence: e.verdict.confidence,
   degraded: e.verdict.degraded,
   replayed: e.verdict.replayed,
+  rule: e.verdict.rule,
+  prechecked: e.verdict.prechecked,
 });
 
 export default function Dashboard() {
@@ -64,13 +79,17 @@ export default function Dashboard() {
   // Replay: re-plays the finished run step by step in every view. Client-side
   // only -- the verdicts are already here, nothing is re-judged or re-sent.
   const [replayN, setReplayN] = useState(null);
+  // Guard mode: a halted run and actions waiting for a human.
+  const [halt, setHalt] = useState(null);
+  const [approvals, setApprovals] = useState([]);
+  const [deciding, setDeciding] = useState(null);
   const feedRef = useRef(null);
 
   useEffect(() => {
     document.title = 'Live dashboard · SentinelMind';
   }, []);
 
-  const reset = useCallback(() => { setSteps([]); setSelected(null); }, []);
+  const reset = useCallback(() => { setSteps([]); setSelected(null); setHalt(null); setApprovals([]); }, []);
 
   useEffect(() => {
     const offs = [
@@ -87,6 +106,9 @@ export default function Dashboard() {
       })),
       on('goal', (d) => { setGoal(d.goal); reset(); }),
       on('cleared', reset),
+      on('halted', (d) => setHalt(d)),
+      on('approval_request', (a) => setApprovals((prev) => (prev.some((p) => p.id === a.id) ? prev : [...prev, a]))),
+      on('approval_resolved', (r) => setApprovals((prev) => prev.filter((p) => p.id !== r.id))),
     ];
     return () => offs.forEach((off) => off && off());
   }, [on, reset]);
@@ -98,6 +120,10 @@ export default function Dashboard() {
     // Draw the page once the session and its verdicts are in. Drawing it empty
     // first and filling in moved every tile below the goal box (layout shift
     // 0.08 on phones); both answers take a few milliseconds locally.
+    fetch('/guard/state').then((r) => r.json()).then((g) => {
+      if (g.halted) setHalt({ reason: g.halt_reason, strikes: g.strikes });
+      if (g.pending_approvals?.length) setApprovals(g.pending_approvals);
+    }).catch(() => {});
     Promise.allSettled([
       fetch('/session').then((r) => r.json()).then((d) => setGoal(d.goal || '')),
       fetch('/audit').then((r) => r.json()).then((d) => {
@@ -121,6 +147,17 @@ export default function Dashboard() {
     return () => clearTimeout(t);
   }, [replayN, steps.length]);
 
+  const decide = (id, decision) => {
+    setDeciding(id);
+    fetch(`/guard/approval/${id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision }),
+    })
+      .then(() => setApprovals((prev) => prev.filter((p) => p.id !== id)))
+      .finally(() => setDeciding(null));
+  };
+
   /* Selecting a step anywhere scrolls the feed to it. */
   useEffect(() => {
     if (!selected) return;
@@ -130,8 +167,10 @@ export default function Dashboard() {
   /* Derived -- from what is visible, so a replay drives every view at once. */
   const visible = useMemo(() => (replayN == null ? steps : steps.slice(0, replayN)), [steps, replayN]);
   const judged = visible.filter((s) => s.status !== 'PENDING');
-  const counts = judged.reduce((a, s) => ({ ...a, [s.status]: (a[s.status] || 0) + 1 }), { OK: 0, WARN: 0, ANOMALY: 0 });
-  const latencies = judged.map((s) => s.latency).filter(Number.isFinite);
+  const counts = judged.reduce((a, s) => ({ ...a, [s.status]: (a[s.status] || 0) + 1 }), { OK: 0, WARN: 0, ANOMALY: 0, BLOCKED: 0 });
+  const blockedSteps = judged.filter((s) => s.status === 'BLOCKED');
+  const blockedByRule = blockedSteps.reduce((a, s) => ({ ...a, [s.rule]: (a[s.rule] || 0) + 1 }), {});
+  const latencies = judged.filter((s) => s.status !== 'BLOCKED').map((s) => s.latency).filter(Number.isFinite);
   const p50 = quantile(latencies, 0.5);
   const p95 = quantile(latencies, 0.95);
   const anomalyRate = judged.length ? Math.round((counts.ANOMALY / judged.length) * 100) : null;
@@ -183,6 +222,40 @@ export default function Dashboard() {
 
       {!ready ? <main className="min-h-screen" aria-busy="true" /> : (
       <main className="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-6 md:py-8 flex flex-col gap-5">
+        {/* ── Guard mode: halted run, and actions waiting for a human ── */}
+        {halt && (
+          <div role="alert" className="anomaly-banner rounded-xl border border-error/60 bg-error/10 px-5 py-4">
+            <p className="flex items-center gap-2 text-[15px] font-semibold text-error">
+              <StatusMark status="BLOCKED" size={12} />
+              SentinelMind stopped this run{halt.strikes ? ` after ${halt.strikes} problems` : ''}
+            </p>
+            <p className="mt-1 text-[15px] leading-snug text-on-background">{halt.reason}</p>
+          </div>
+        )}
+        {approvals.map((a) => (
+          <div key={a.id} role="alert" className="anomaly-banner rounded-xl border border-[#60a5fa]/60 bg-[#60a5fa]/10 px-5 py-4 flex flex-wrap items-center gap-x-6 gap-y-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[15px] font-semibold text-on-background">Waiting for your approval</p>
+              <p className="mt-1 text-[15px] text-on-surface-variant">
+                The agent wants to run <code className="font-label-sm text-[13px] text-on-background">{a.tool}</code>
+                {a.input?.kwargs && Object.keys(a.input.kwargs).length > 0 && (
+                  <code className="font-label-sm text-[13px] text-on-surface-variant"> {JSON.stringify(a.input.kwargs)}</code>
+                )}. It will not run unless you approve.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" disabled={deciding === a.id} onClick={() => decide(a.id, 'deny')}
+                className="inline-flex min-h-11 items-center rounded-md border border-outline-variant/60 px-4 text-[14px] text-on-background hover:bg-surface-container-high disabled:opacity-50">
+                Deny
+              </button>
+              <button type="button" disabled={deciding === a.id} onClick={() => decide(a.id, 'approve')}
+                className="inline-flex min-h-11 items-center rounded-md bg-[#60a5fa] px-4 text-[14px] font-semibold text-[#06152b] hover:brightness-110 disabled:opacity-50">
+                Approve
+              </button>
+            </div>
+          </div>
+        ))}
+
         {/* ── Goal + latest anomaly ── */}
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.2fr] gap-5">
           <div className={`rounded-xl border px-5 py-4 ${goal ? 'border-outline-variant/40 bg-surface-container-low' : 'border-amber-500/30 bg-amber-500/5'}`}>
@@ -214,8 +287,8 @@ export default function Dashboard() {
         </div>
 
         {/* ── KPI tiles ── */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-5">
-          <Tile label="Steps judged" value={judged.length} sub={pending ? `${pending} being judged` : `${counts.OK} OK · ${counts.WARN} warn · ${counts.ANOMALY} anomaly`}>
+        <div className={`grid grid-cols-2 gap-3 md:gap-5 ${counts.BLOCKED ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}>
+          <Tile label="Steps judged" value={judged.length} sub={pending ? `${pending} being judged` : `${counts.OK} OK · ${counts.WARN} warn · ${counts.ANOMALY} anomaly${counts.BLOCKED ? ` · ${counts.BLOCKED} blocked` : ''}`}>
             <MixBar counts={counts} />
           </Tile>
           <Tile
@@ -233,6 +306,14 @@ export default function Dashboard() {
             tone={streak.n >= 3 ? 'text-error' : streak.n === 2 ? 'text-amber-300' : 'text-on-background'}
             sub={streak.n > 1 ? <span className="font-label-sm text-[12px] break-all">{streak.tool} in a row</span> : 'no tool called twice in a row'}
           />
+          {counts.BLOCKED > 0 && (
+            <Tile
+              label="Stopped before running"
+              value={counts.BLOCKED}
+              tone="text-[#60a5fa]"
+              sub={Object.entries(blockedByRule).map(([r, n]) => `${n} ${RULE_LABEL[r] || r}`).join(' · ')}
+            />
+          )}
         </div>
 
         {/* ── View controls ── */}
@@ -276,7 +357,7 @@ export default function Dashboard() {
           <div className="flex flex-col gap-5 min-w-0">
             <Panel
               title="Run timeline"
-              aside={<StatusLegend statuses={['OK', 'WARN', 'ANOMALY', 'PENDING']} />}
+              aside={<StatusLegend statuses={counts.BLOCKED ? ['OK', 'WARN', 'ANOMALY', 'BLOCKED', 'PENDING'] : ['OK', 'WARN', 'ANOMALY', 'PENDING']} />}
               bodyClass="px-3 pb-4 pt-2"
             >
               <p className="px-2 pb-2 text-[13px] text-on-surface-variant">One lane per tool, one column per step. A lane lighting up again and again is a loop.</p>
@@ -285,7 +366,7 @@ export default function Dashboard() {
             <Panel title="Verdict latency per step" aside={<span className="text-[13px] text-on-surface-variant">time from trace to verdict; colour is the verdict</span>}>
               <LatencyChart steps={visible} selected={selected} onSelect={setSelected} />
             </Panel>
-            <Panel title="Verdicts by tool" aside={<StatusLegend />}>
+            <Panel title="Verdicts by tool" aside={<StatusLegend statuses={counts.BLOCKED ? ['OK', 'WARN', 'ANOMALY', 'BLOCKED'] : ['OK', 'WARN', 'ANOMALY']} />}>
               <ToolBreakdown
                 steps={visible}
                 onPickTool={(tool) => {
@@ -350,6 +431,8 @@ export default function Dashboard() {
                           <Confidence value={s.confidence} />
                           {s.degraded && <span className="text-[12px] text-amber-300">judge unavailable</span>}
                           {s.replayed && <span className="text-[12px] text-on-surface-variant">replayed</span>}
+                          {s.status === 'BLOCKED' && <span className="text-[12px] text-[#93c5fd]">never ran · {RULE_LABEL[s.rule] || s.rule}</span>}
+                          {s.prechecked && <span className="text-[12px] text-on-surface-variant">checked before it ran</span>}
                         </span>
                       )}
                     </button>

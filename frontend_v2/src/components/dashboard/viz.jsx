@@ -32,6 +32,7 @@ export function StatusMark({ status, size = 12, className = '' }) {
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className={className} aria-hidden="true">
       {status === 'WARN' && <path d={`M${h} 1 L${size - 1} ${size - 1.5} L1 ${size - 1.5} Z`} fill={c} />}
       {status === 'ANOMALY' && <path d={`M${h} 0.5 L${size - 0.5} ${h} L${h} ${size - 0.5} L0.5 ${h} Z`} fill={c} />}
+      {status === 'BLOCKED' && <rect x="1" y="1" width={size - 2} height={size - 2} rx="1.5" fill={c} />}
       {status === 'OK' && <circle cx={h} cy={h} r={h - 1} fill={c} />}
       {(status === 'PENDING' || !STATUS[status]) && <circle cx={h} cy={h} r={h - 1.5} fill="none" stroke={c} strokeWidth="1.5" />}
     </svg>
@@ -85,7 +86,7 @@ export function MixBar({ counts }) {
   if (!total) return <div className="h-2 rounded-full bg-outline-variant/30" />;
   return (
     <div className="flex h-2 gap-[2px]" role="img" aria-label={`${counts.OK} OK, ${counts.WARN} warn, ${counts.ANOMALY} anomaly`}>
-      {['OK', 'WARN', 'ANOMALY'].filter((s) => counts[s]).map((s) => (
+      {['OK', 'WARN', 'ANOMALY', 'BLOCKED'].filter((s) => counts[s]).map((s) => (
         <div
           key={s}
           className="h-full rounded-full transition-[flex-grow] duration-500 ease-out"
@@ -219,6 +220,7 @@ function StatusMarkSvg({ status }) {
   const c = STATUS[status].color;
   if (status === 'WARN') return <path d="M8 1.5 L15 14 L1 14 Z" fill={c} />;
   if (status === 'ANOMALY') return <path d="M8 0.5 L15.5 8 L8 15.5 L0.5 8 Z" fill={c} />;
+  if (status === 'BLOCKED') return <rect x="1.5" y="1.5" width="13" height="13" rx="2" fill={c} />;
   return <circle cx="8" cy="8" r="6.5" fill={c} />;
 }
 
@@ -229,12 +231,14 @@ function StatusMarkSvg({ status }) {
 export function LatencyChart({ steps, selected, onSelect }) {
   const [tip, setTip] = useState(null);
   const [box, avail] = useWidth();
-  const judged = steps.map((s, i) => ({ ...s, n: i + 1 })).filter((s) => Number.isFinite(s.latency));
+  const judged = steps.map((s, i) => ({ ...s, n: i + 1 })).filter((s) => Number.isFinite(s.latency) && s.status !== 'BLOCKED');
   if (!judged.length) return <p ref={box} className="flex h-[200px] items-center justify-center text-[15px] text-on-surface-variant">No verdicts yet.</p>;
 
   const W = Math.max(280, avail || 560); const H = 200; const L = 44; const B = 24; const T = 22;
   const max = Math.max(...judged.map((s) => s.latency)) * 1.15 || 1;
-  const step = max / 1000 > 4 ? 2000 : max / 1000 > 1.5 ? 1000 : 250;
+  // A round step that gives at most five gridlines, whatever the range --
+  // slow rate-limited verdicts (20 s+) used to stack a dozen labels.
+  const step = [250, 500, 1000, 2000, 5000, 10000, 20000, 30000, 60000].find((v) => max / v <= 5) || 120000;
   const ticks = [];
   for (let v = 0; v <= max; v += step) ticks.push(v);
   const bw = Math.min(40, (W - L) / judged.length);
@@ -295,30 +299,30 @@ export function ToolBreakdown({ steps, onPickTool }) {
     const m = new Map();
     steps.forEach((s) => {
       if (s.status === 'PENDING') return;
-      const r = m.get(s.tool) || { tool: s.tool, OK: 0, WARN: 0, ANOMALY: 0 };
+      const r = m.get(s.tool) || { tool: s.tool, OK: 0, WARN: 0, ANOMALY: 0, BLOCKED: 0 };
       r[s.status] += 1;
       m.set(s.tool, r);
     });
-    return [...m.values()].sort((a, b) => b.ANOMALY - a.ANOMALY || b.WARN - a.WARN || (b.OK - a.OK));
+    return [...m.values()].sort((a, b) => (b.ANOMALY + b.BLOCKED) - (a.ANOMALY + a.BLOCKED) || b.WARN - a.WARN || (b.OK - a.OK));
   }, [steps]);
   if (!rows.length) return <p className="flex min-h-[200px] items-center justify-center text-[15px] text-on-surface-variant">No verdicts yet.</p>;
-  const max = Math.max(...rows.map((r) => r.OK + r.WARN + r.ANOMALY));
+  const max = Math.max(...rows.map((r) => r.OK + r.WARN + r.ANOMALY + r.BLOCKED));
 
   return (
     <ul className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2.5">
       {rows.map((r) => {
-        const total = r.OK + r.WARN + r.ANOMALY;
+        const total = r.OK + r.WARN + r.ANOMALY + r.BLOCKED;
         return (
           <li key={r.tool}>
             <button type="button" onClick={() => onPickTool(r.tool)} className="group w-full text-left min-h-11">
               <div className="flex items-baseline justify-between gap-3">
                 <span className="font-label-sm text-[12px] text-on-background break-all group-hover:text-primary-container transition-colors">{r.tool}</span>
                 <span className="text-[12px] tabular-nums text-on-surface-variant shrink-0">
-                  {total} · {r.ANOMALY ? `${r.ANOMALY} anomaly` : r.WARN ? `${r.WARN} warn` : 'all OK'}
+                  {total} · {r.BLOCKED ? `${r.BLOCKED} blocked` : r.ANOMALY ? `${r.ANOMALY} anomaly` : r.WARN ? `${r.WARN} warn` : 'all OK'}
                 </span>
               </div>
               <div className="mt-1.5 flex h-2.5 gap-[2px]" style={{ width: `${(total / max) * 100}%` }}>
-                {['OK', 'WARN', 'ANOMALY'].filter((s) => r[s]).map((s) => (
+                {['OK', 'WARN', 'ANOMALY', 'BLOCKED'].filter((s) => r[s]).map((s) => (
                   <div key={s} className="h-full rounded-sm bar-grow-x" style={{ flexGrow: r[s], background: STATUS[s].color }} />
                 ))}
               </div>
