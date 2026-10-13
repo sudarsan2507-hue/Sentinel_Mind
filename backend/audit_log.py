@@ -75,7 +75,7 @@ class AuditLog:
         """Counts per status, for the dashboard header."""
         with self._lock:
             entries = list(self._entries)
-        counts = {"OK": 0, "WARN": 0, "ANOMALY": 0}
+        counts = {"OK": 0, "WARN": 0, "ANOMALY": 0, "BLOCKED": 0}
         for entry in entries:
             status = entry["status"].upper()
             counts[status] = counts.get(status, 0) + 1

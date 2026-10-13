@@ -6,6 +6,9 @@
     GET  /audit          the structured audit log
     GET  /audit/export   the log as a downloadable JSON file
     POST /audit/clear    reset between demo runs
+    POST /guard/check    guard mode: may this step run? (allow/block/pending/halt)
+    GET  /guard/state    strikes, halt state, pending approvals
+    GET/POST /guard/approval/<id>   read or decide a pending human approval
     GET  /               the live dashboard
 
 Verdicts are pushed to connected dashboards over WebSocket as ``verdict`` events.
@@ -25,6 +28,7 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO
 
 from audit_log import AuditLog
+from guard import BLOCK, HALT, Guard
 from knowledge_graph import KnowledgeGraph
 from meta_agent import MetaAgent
 from session_context import SessionContext
@@ -67,13 +71,45 @@ KNOWN_TOOLS = [
     "call_internal_api",
     "internal_api:/v1/orders/list",
     "internal_api:/v1/customers/search",
+    # real agent, --rogue: tools with real side effects. Registered, so using
+    # them is not a hallucination -- whether a given use is justified is the
+    # question guard mode asks before they run.
+    "refund_order",
+    "erase_customer_data",
+    "email_customer",
 ]
+
+def _tool_set(env: str, default: str) -> set[str]:
+    return {t.strip() for t in os.environ.get(env, default).split(",") if t.strip()}
+
+
+# Judged before they run (guard mode). They move money or change records.
+RISKY_TOOLS = _tool_set("SENTINEL_RISKY_TOOLS", "refund_order")
+# Never run on a model's say-so: a human approves each call on the dashboard.
+APPROVAL_TOOLS = _tool_set("SENTINEL_APPROVAL_TOOLS", "erase_customer_data")
+
+
+def _blocked_verdict(event: dict) -> dict:
+    """The verdict for a step the guard stopped. No model call: the decision
+    was already made, and its reason is the explanation."""
+    g = event.get("guard") or {}
+    pre = g.get("verdict") or {}
+    return {
+        "status": "BLOCKED",
+        "explanation": g.get("reason", "Stopped by SentinelMind before it ran."),
+        "confidence": float(pre.get("confidence", 1.0)),
+        "latency_ms": 0.0,
+        "blocked": True,
+        "rule": g.get("rule", ""),
+        "halted": g.get("action") == HALT,
+    }
 
 
 def create_app(
     meta_agent: MetaAgent | None = None,
     audit_log: AuditLog | None = None,
     knowledge_graph: KnowledgeGraph | None = None,
+    guard: Guard | None = None,
 ) -> tuple[Flask, SocketIO]:
     """Build the app. Dependencies are injectable so tests can pass fakes."""
     app = Flask(__name__, static_folder=None)
@@ -116,8 +152,22 @@ def create_app(
         window=int(os.environ.get("SENTINEL_CONTEXT_WINDOW", 8))
     )
 
+    app.config["GUARD"] = guard or Guard(
+        KNOWN_TOOLS,
+        meta_agent=app.config["META_AGENT"],
+        risky_tools=RISKY_TOOLS,
+        approval_tools=APPROVAL_TOOLS,
+        max_strikes=int(os.environ.get("SENTINEL_GUARD_MAX_STRIKES", 4)),
+        min_confidence=float(os.environ.get("SENTINEL_GUARD_MIN_CONFIDENCE", 0.6)),
+    )
+
     work: queue.Queue = queue.Queue()
     app.config["WORK_QUEUE"] = work
+    # Which run is current. Clearing the log or declaring a new goal starts a new
+    # run; events still queued from the old one are dropped instead of judged.
+    # Under a rate limit the queue can hold minutes of work, and without this a
+    # finished run's verdicts landed in the next run -- and cost tokens nobody saw.
+    app.config["RUN_EPOCH"] = 0
 
     def worker() -> None:
         """Drain trace events, evaluate, record, broadcast."""
@@ -125,14 +175,28 @@ def create_app(
             event = work.get()
             if event is None:
                 break
+            if event.pop("_epoch", app.config["RUN_EPOCH"]) != app.config["RUN_EPOCH"]:
+                work.task_done()
+                continue
             try:
                 session: SessionContext = app.config["SESSION"]
-                verdict = app.config["META_AGENT"].evaluate(event, context=session)
+                g = event.get("guard") or {}
+                if g.get("action") in (BLOCK, HALT):
+                    verdict = _blocked_verdict(event)
+                elif g.get("verdict"):
+                    # Judged before it ran and allowed: reuse that verdict rather
+                    # than paying for the same judgement twice.
+                    verdict = {**g["verdict"], "prechecked": True}
+                else:
+                    verdict = app.config["META_AGENT"].evaluate(event, context=session)
                 # Record after judging, so a step never sees itself as a repeat.
                 session.record(event, verdict)
                 entry = app.config["AUDIT_LOG"].record(event, verdict)
                 socketio.emit("verdict", entry)
                 socketio.emit("summary", app.config["AUDIT_LOG"].summary())
+                tripped = app.config["GUARD"].note_verdict(event, verdict)
+                if tripped:
+                    socketio.emit("halted", tripped)
 
                 # Turn detection into memory. Only mistakes are remembered, and
                 # only ones we actually judged -- see KnowledgeGraph.ingest.
@@ -176,7 +240,9 @@ def create_app(
             return jsonify({"error": "expected a trace event object with a 'tool' field"}), 400
 
         socketio.emit("trace", event)  # draw the node immediately, grey
-        work.put(event)
+        # The guard's own record, written now -- judging below may lag by seconds.
+        app.config["GUARD"].observe(event)
+        work.put({**event, "_epoch": app.config["RUN_EPOCH"]})
         return jsonify({"accepted": True, "event_id": event.get("id")}), 202
 
     @app.post("/replay")
@@ -228,6 +294,8 @@ def create_app(
         session: SessionContext = app.config["SESSION"]
         session.goal = goal
         session.clear()  # a new goal is a new run
+        app.config["RUN_EPOCH"] += 1
+        app.config["GUARD"].reset(goal)
         app.config["KNOWLEDGE"].start_run()
         socketio.emit("goal", {"goal": goal})
         return jsonify({"goal": goal}), 200
@@ -307,8 +375,76 @@ def create_app(
     def audit_clear():
         app.config["AUDIT_LOG"].clear()
         app.config["SESSION"].clear()
+        app.config["RUN_EPOCH"] += 1
+        app.config["GUARD"].reset()
         socketio.emit("cleared", {})
         return jsonify({"cleared": True}), 200
+
+    # -- guard mode ---------------------------------------------------------
+
+    @app.post("/guard/check")
+    def guard_check():
+        """May this step run? Called by the decorator before the tool executes.
+
+        Synchronous on purpose: the agent waits for the answer. Rule checks are
+        instant; only risky tools pay for a judge call.
+        """
+        call = request.get_json(silent=True)
+        if not isinstance(call, dict) or "tool" not in call:
+            return jsonify({"error": "expected a call object with a 'tool' field"}), 400
+        guard: Guard = app.config["GUARD"]
+        decision = guard.check(call)
+        if decision["action"] == "pending":
+            socketio.emit("approval_request", {
+                "id": decision["approval_id"], "tool": call.get("tool"),
+                "input": call.get("input"), "reason": decision.get("reason"),
+            })
+        if decision.get("halted") or decision["action"] == HALT:
+            socketio.emit("halted", {"halted": True, "reason": guard.halt_reason, "strikes": guard.strikes})
+        return jsonify(decision), 200
+
+    @app.get("/guard/state")
+    def guard_state():
+        return jsonify(app.config["GUARD"].state()), 200
+
+    @app.get("/guard/approval/<approval_id>")
+    def guard_approval_status(approval_id: str):
+        guard: Guard = app.config["GUARD"]
+        status = guard.approval_status(approval_id)
+        if status is None:
+            return jsonify({"error": "unknown approval id"}), 404
+        body = {"id": approval_id, "status": status}
+        decision = guard.approvals[approval_id].get("decision")
+        if decision:
+            body["decision"] = decision
+        return jsonify(body), 200
+
+    @app.post("/guard/approval/<approval_id>")
+    def guard_approval_decide(approval_id: str):
+        """A human's decision (dashboard), or the agent's timeout (deny)."""
+        payload = request.get_json(silent=True) or {}
+        choice = payload.get("decision")
+        if choice not in ("approve", "deny"):
+            return jsonify({"error": "expected {\"decision\": \"approve\" | \"deny\"}"}), 400
+        guard: Guard = app.config["GUARD"]
+        outcome = guard.decide(approval_id, approve=choice == "approve")
+        if outcome is None:
+            status = guard.approval_status(approval_id)
+            if status is None:
+                return jsonify({"error": "unknown approval id"}), 404
+            return jsonify({"error": f"already {status}"}), 409
+        if payload.get("timed_out") and outcome["action"] == "block":
+            tool = guard.approvals[approval_id]["tool"]
+            outcome["rule"] = "approval_timeout"
+            outcome["reason"] = (f"Blocked by SentinelMind: nobody approved {tool} in time, so it "
+                                 f"did not run. Do not retry it. Tell the user it was not done and "
+                                 f"that a person will follow up.")
+        guard.approvals[approval_id]["decision"] = outcome
+        socketio.emit("approval_resolved", {"id": approval_id, "decision": choice,
+                                            "timed_out": bool(payload.get("timed_out"))})
+        if outcome.get("halted"):
+            socketio.emit("halted", {"halted": True, "reason": guard.halt_reason, "strikes": guard.strikes})
+        return jsonify(outcome), 200
 
     @app.get("/")
     def dashboard():
