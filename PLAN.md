@@ -343,3 +343,26 @@ real-time detection + explanation *is* the intervention enabler, and injection i
 - Never push to GitHub without explicit approval.
 - No `Co-Authored-By` trailer on commits.
 - PLAN.md and PROGRESS.md stay current — plan changes land here, work log lands there.
+
+---
+
+## 12. Guard mode (2026-10-14)
+
+Detection alone cannot prevent an irreversible action — by the time the verdict lands, the
+refund has gone out. Guard mode moves the check in front of the call.
+
+- **Where:** `@monitor` asks `POST /guard/check` before running the function (opt-in via
+  `enable_guard(url)`). The server owns policy, the judge and per-run state (`backend/guard.py`).
+- **Order of checks:** halted run → `halt`; model calls → `allow`; unregistered tool → `block`
+  (rule, instant); third identical call → `block` (rule, instant); approval tool → `pending`
+  (dashboard Approve/Deny, timeout = deny); risky tool → judge pre-check with the goal and the
+  outputs gathered so far → `block` on ANOMALY ≥ 0.6 confidence, or if the judge is unreachable.
+- **Steering:** a block raises `GuardBlocked`; its message is an instruction the agent receives
+  as the tool result. `GuardHalt` ends the run (circuit breaker: 4 strikes = blocks + tool-call
+  ANOMALY verdicts).
+- **Own state, synchronous:** the guard records each step at `/trace` receipt, including
+  outputs, because the judge queue lags on rate-limited tiers.
+- **Fail safe:** guard unreachable → ordinary tools run, risky/approval tools don't.
+- **Measured by** `evals/run_guard_experiment.py`: the rogue agent (`real_agent.py --rogue`:
+  pressure prompt + side-effect tools + an out-of-policy customer) with guard off vs on, scored
+  on its own ledger (money moved, data erased), not on verdicts.
