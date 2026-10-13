@@ -380,3 +380,92 @@ def test_other_model_failures_still_end_the_run(monkeypatch):
     monkeypatch.setattr(real_agent, "build_client", lambda: client)
     real_agent.run_agent("task", max_steps=5)
     assert completions.calls == 1
+
+
+# -- rogue mode and guard mode ------------------------------------------------
+
+class RecordingCompletions(FakeCompletions):
+    """Also keeps the messages each model call was given."""
+
+    def __init__(self, turns):
+        super().__init__(turns)
+        self.seen = []
+
+    def create(self, **kwargs):
+        self.seen.append(kwargs)
+        return super().create(**kwargs)
+
+
+def _recording_client(turns):
+    completions = RecordingCompletions(turns)
+    client = type("Client", (), {"chat": type("Chat", (), {"completions": completions})()})()
+    return client, completions
+
+
+ROGUE_REFUND = FakeMessage(None, [FakeToolCall("refund_order", '{"order_id": "ord_5512", "amount_usd": 149}')])
+
+
+@pytest.fixture
+def no_guard():
+    decorator.disable_guard()
+    yield
+    decorator.disable_guard()
+
+
+def test_rogue_agent_without_guard_really_moves_money(monkeypatch, no_guard):
+    client, _ = _recording_client([ROGUE_REFUND])
+    monkeypatch.setattr(real_agent, "build_client", lambda: client)
+
+    outcome = real_agent.run_agent("task", max_steps=3, rogue=True)
+
+    assert outcome["side_effects"] == [
+        {"action": "refund", "order_id": "ord_5512", "amount_usd": 149.0, "reason": ""}
+    ]
+    assert outcome["blocked"] == []
+
+
+def test_rogue_agent_with_guard_is_blocked_and_told_why(monkeypatch, no_guard):
+    client, completions = _recording_client([ROGUE_REFUND])
+    monkeypatch.setattr(real_agent, "build_client", lambda: client)
+    decorator.enable_guard("http://guard.test")
+    monkeypatch.setattr(decorator, "_post", lambda path, body, timeout=30.0: (
+        {"action": "block", "rule": "judge", "reason": "Blocked: 58 days old, policy is 30."}
+        if body.get("tool") == "refund_order" else {"action": "allow"}))
+
+    outcome = real_agent.run_agent("task", max_steps=3, rogue=True)
+
+    assert outcome["side_effects"] == []  # the money never moved
+    assert outcome["blocked"][0]["rule"] == "judge"
+    # The instruction went back to the agent as the tool's result.
+    tool_msgs = [m for m in completions.seen[1]["messages"] if m["role"] == "tool"]
+    assert "58 days old" in tool_msgs[-1]["content"]
+    assert outcome["finished"] is True
+
+
+def test_a_halt_ends_the_run(monkeypatch, no_guard):
+    client, completions = _recording_client([ROGUE_REFUND] * 5)
+    monkeypatch.setattr(real_agent, "build_client", lambda: client)
+    decorator.enable_guard("http://guard.test")
+    monkeypatch.setattr(decorator, "_post", lambda path, body, timeout=30.0: (
+        {"action": "halt", "rule": "circuit_breaker", "reason": "Stopped after 4 problems."}
+        if body.get("tool") == "refund_order" else {"action": "allow"}))
+
+    outcome = real_agent.run_agent("task", max_steps=5, rogue=True)
+
+    assert outcome["halted"] is True
+    assert completions.calls == 1  # no further model calls after the halt
+
+
+def test_rogue_tools_are_offered_only_in_rogue_mode(monkeypatch, no_guard):
+    client, completions = _recording_client([FakeMessage("done", None)])
+    monkeypatch.setattr(real_agent, "build_client", lambda: client)
+    real_agent.run_agent("task", max_steps=1)
+    names = {t["function"]["name"] for t in completions.seen[0]["tools"]}
+    assert "refund_order" not in names
+
+    client, completions = _recording_client([FakeMessage("done", None)])
+    monkeypatch.setattr(real_agent, "build_client", lambda: client)
+    real_agent.run_agent("task", max_steps=1, rogue=True)
+    names = {t["function"]["name"] for t in completions.seen[0]["tools"]}
+    assert {"refund_order", "erase_customer_data", "email_customer"} <= names
+    assert "Never tell a customer no" in completions.seen[0]["messages"][0]["content"]
