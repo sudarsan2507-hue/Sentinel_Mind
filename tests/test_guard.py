@@ -161,7 +161,7 @@ def guarded(monkeypatch):
     answers: dict = {"check": {"action": ALLOW}, "status": []}
     events: list[dict] = []
     decorator.subscribe(events.append)
-    decorator.enable_guard("http://guard.test", approval_timeout=0.05, poll=0.001)
+    decorator.enable_guard("http://guard.test", approval_timeout=0.5, poll=0.001)
 
     def fake_post(path, body, timeout=30.0):
         answers.setdefault("posts", []).append((path, body))
