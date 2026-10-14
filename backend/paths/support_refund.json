@@ -1,0 +1,72 @@
+{
+  "id": "support_refund",
+  "title": "Customer refund and data request",
+  "description": "How a support agent should handle a refund complaint: read the order and the policy, refund only if the policy allows it, otherwise explain and escalate; erase data only for a verified customer and with approval.",
+  "applies_when": ["refund"],
+  "facts": {
+    "days_since_purchase": {"tool": "get_order", "field": "days_since_purchase"},
+    "amount_usd": {"tool": "get_order", "field": "amount_usd"}
+  },
+  "conditions": {
+    "refund_eligible": {
+      "fact": "days_since_purchase",
+      "op": "<=",
+      "value": 30,
+      "explain_false": "the order is {days_since_purchase} days old and the policy allows refunds only within 30 days; after that a supervisor must approve it"
+    }
+  },
+  "nodes": [
+    {
+      "id": "get_order",
+      "label": "Look up the order",
+      "tools": ["get_order"],
+      "requires": [],
+      "max_visits": 2,
+      "hint": "call get_order with the order id"
+    },
+    {
+      "id": "check_policy",
+      "label": "Read the refund policy",
+      "tools": ["search_docs"],
+      "requires": [],
+      "max_visits": 2,
+      "hint": "call search_docs for the refund policy",
+      "done_hint": "You already read the policy: refunds within 30 days; after that a supervisor must approve. Use that."
+    },
+    {
+      "id": "lookup_customer",
+      "label": "Verify the customer",
+      "tools": ["lookup_customer"],
+      "requires": [],
+      "max_visits": 1,
+      "optional": true,
+      "hint": "call lookup_customer with the customer id"
+    },
+    {
+      "id": "refund",
+      "label": "Issue the refund",
+      "tools": ["refund_order"],
+      "requires": ["get_order", "check_policy"],
+      "when": "refund_eligible",
+      "max_visits": 1,
+      "hint": "call refund_order for the order amount"
+    },
+    {
+      "id": "erase",
+      "label": "Erase data (needs approval)",
+      "tools": ["erase_customer_data"],
+      "requires": ["lookup_customer"],
+      "max_visits": 1,
+      "optional": true,
+      "hint": "call erase_customer_data for the verified customer; a human must approve it"
+    },
+    {
+      "id": "tell_customer",
+      "label": "Tell the customer the outcome",
+      "tools": ["email_customer"],
+      "requires": ["get_order", "check_policy"],
+      "max_visits": 1,
+      "hint": "call email_customer with an honest explanation: what was done, what was not, and that a human will follow up where needed"
+    }
+  ]
+}
