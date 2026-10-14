@@ -86,10 +86,9 @@ distribution — excluding it silently would flatter the numbers.
    test guarding that one file. Nothing guards the rest.
 3. **Rotate the Groq key.** Still not confirmed. The key in use passed through a corrupted
    file, and two characters were dropped from it at one point.
-4. **Is the learning loop real? Unmeasured.** The knowledge graph, the lessons, and the
-   injection all work. The effect on failure rate has never been measured without rate-limit
-   contamination. `evals/run_learning_experiment.py --runs 3` needs ~25–30k tokens against a
-   100k daily cap. **Do not claim the loop reduces failures until this prints a number.**
+4. **Is the learning loop real? First measured 2026-10-14:** cold 1.0 anomalies/run, warm 0,
+   steps 12 → 5.5, two completed runs a side. Direction only; re-run with `--runs 5` for a
+   number worth quoting as a rate.
 5. ~~`demo_agent.py` has 0% coverage~~ — closed 2026-07-30, now 85%.
 6. **LangChain wiring.** Deck names it as the monitored framework; the demo wraps plain
    Python callables. `@monitor` is framework-agnostic so it's a small job — either wire it
@@ -638,3 +637,25 @@ run to provider connection errors; those arms were re-run (`--arms guard autopil
 scripts on Windows rewrote some files with CRLF endings; normalised back before committing.
 
 Tests: 232 passing.
+
+### 2026-10-14 — learning loop measured
+
+`evals/run_learning_experiment.py --runs 3` against a fresh server (memory backed up, wiped for
+the cold phase, restored afterwards). One run per phase hung past 300s on a slow provider call
+and, before a fix, was scored as 0 anomalies — a hung agent reads as a perfect one. Fixed: the
+script now excludes crashed/hung runs from the means, and the agent's model client has a 60s
+timeout instead of the library's 10 minutes.
+
+| | cold | warm |
+|---|---|---|
+| completed runs | 2 | 2 |
+| anomalies per run | 1.0 | 0 |
+| steps per run | 12 | 5.5 |
+
+Lessons from the cold phase: no refund tool (`/v1/refunds/approve` invented), no escalation
+tool (`/v1/escalations/create` invented), `search_docs` looping. Warm runs invented nothing.
+Raw artifact `evals/results/learning_2026-10-14_18-46-36.json` holds the pre-fix means (0.67 /
+0); the per-run detail is correct.
+
+Also: `test_an_approved_call_runs` was timing-sensitive (50 ms approval window) and failed under
+machine load; the fixture now allows 0.5 s. Tests: 232 passing.

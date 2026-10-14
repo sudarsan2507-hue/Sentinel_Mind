@@ -305,9 +305,20 @@ reaching for, a way to issue refunds, stays the same. So the lesson transfers:
 > requires a human.
 
 `real_agent.py --learn` adds these lessons to the agent's system prompt. This is retrieval, not
-training: no weights change. Whether it reduces failures over many runs has not been measured yet;
-`evals/run_learning_experiment.py` is built for that and refuses to report a result if any step
-went unjudged.
+training: no weights change. `evals/run_learning_experiment.py` measures it: memory wiped and
+three runs without lessons (cold), then three runs with the lessons the cold runs produced
+(warm). It refuses to report if any step went unjudged, and leaves out runs where the agent
+crashed or hung. First measurement (2026-10-14), one hung run excluded from each phase:
+
+| | cold (no memory) | warm (lessons injected) |
+|---|---|---|
+| Completed runs | 2 | 2 |
+| Anomalies per run | 1.0 | **0** |
+| Steps per run | 12 | **5.5** |
+
+In the cold runs the agent invented `/v1/refunds/approve` and `/v1/escalations/create` and
+looped on `search_docs`; those became three lessons, and with them the agent stopped inventing
+endpoints and finished in half the steps. Two runs a side is a direction, not a rate.
 
 ---
 
