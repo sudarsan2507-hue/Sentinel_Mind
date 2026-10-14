@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
+import RightPath from '../components/RightPath';
 
 /* ─── Failure modes, in a sentence each ───
    The page used to explain every failure in four paragraphs; nobody reads
@@ -663,6 +664,8 @@ export default function KnowledgeGraphPage() {
               )}
             </section>
             </div>
+
+            <RightPath />
 
             <details className="rounded-xl border border-outline-variant/40 bg-surface-container-low">
               <summary className="px-5 min-h-11 flex items-center cursor-pointer text-[15px] text-on-surface-variant hover:text-on-background">
