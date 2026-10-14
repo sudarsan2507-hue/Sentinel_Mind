@@ -1,0 +1,7 @@
+phase,run,steps,ok,warn,anomaly,degraded,agent_seconds,agent_exit_code,meta_agent_tokens,verdict_latency_ms_mean,anomaly_tools
+cold,1,10,7,2,1,0,167.7,0,15977,2354.8,internal_api:/v1/refunds/approve
+cold,2,0,0,0,0,0,303.29,-1,0,0.0,
+cold,3,14,12,1,1,0,293.2,0,23488,6399.3,internal_api:/v1/escalations/create
+warm,1,6,5,1,0,0,250.37,0,10385,4819.0,
+warm,2,5,5,0,0,0,278.29,0,7571,1712.1,
+warm,3,0,0,0,0,0,300.38,-1,0,0.0,

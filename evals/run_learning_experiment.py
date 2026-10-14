@@ -44,7 +44,7 @@ def one_run(learn: bool, max_steps: int, settle: float) -> dict:
     """Run the agent once and return the verdict counts for that run."""
     requests.post(f"{SERVER}/audit/clear", timeout=10)
 
-    cmd = [sys.executable, "real_agent.py", "--max-steps", str(max_steps)]
+    cmd = [sys.executable, "real_agent.py", "--max-steps", str(max_steps), "--server", SERVER]
     if learn:
         cmd.append("--learn")
 
@@ -52,7 +52,11 @@ def one_run(learn: bool, max_steps: int, settle: float) -> dict:
     # The exit code was previously discarded. An agent that crashed on startup
     # produced zero steps and therefore zero anomalies -- indistinguishable, in
     # the mean, from an agent that behaved perfectly.
-    proc = subprocess.run(cmd, cwd=BACKEND, capture_output=True, text=True, timeout=300)
+    try:
+        proc = subprocess.run(cmd, cwd=BACKEND, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        # A hung run is a failed run, not a reason to lose the whole experiment.
+        proc = subprocess.CompletedProcess(cmd, returncode=-1, stderr="agent timed out after 300s")
     agent_seconds = round(time.perf_counter() - started, 2)
 
     # Verdicts are judged on a worker thread; give it time to drain the queue.
@@ -133,9 +137,12 @@ def _phase_metrics(runs: list[dict]) -> dict:
     """Aggregate one phase. Everything a chart might want, computed once."""
     if not runs:
         return {}
-    anomalies = [r["anomaly"] for r in runs]
+    # A run whose agent crashed or hung took few or no steps and so scores few
+    # or no anomalies; averaging it in would read as good behaviour.
+    anomalies = [r["anomaly"] for r in runs if r["agent_exit_code"] == 0] or [0]
     return {
         "runs": len(runs),
+        "completed_runs": sum(1 for r in runs if r["agent_exit_code"] == 0),
         "mean_anomalies": round(statistics.mean(anomalies), 3),
         "median_anomalies": round(statistics.median(anomalies), 3),
         # Population stdev, and only when n > 1 -- statistics.stdev raises on a
@@ -240,6 +247,7 @@ def _persist(args, outcome: str, cold: list[dict], warm: list[dict],
 
 
 def main() -> int:
+    global SERVER
     parser = argparse.ArgumentParser(description="Measure whether the agent learns")
     parser.add_argument("--runs", type=int, default=3, help="runs per phase")
     parser.add_argument("--max-steps", type=int, default=8)
@@ -250,7 +258,9 @@ def main() -> int:
         default=20.0,
         help="seconds between runs, to stay under the provider rate limit",
     )
+    parser.add_argument("--server", default=SERVER)
     args = parser.parse_args()
+    SERVER = args.server
 
     try:
         requests.get(f"{SERVER}/health", timeout=5)
@@ -311,6 +321,18 @@ def main() -> int:
         _persist(args, "INVALID", cold, warm, lessons, reason=reason)
         return 1
 
+    cold_ok = [r for r in cold if r["agent_exit_code"] == 0]
+    warm_ok = [r for r in warm if r["agent_exit_code"] == 0]
+    if not cold_ok or not warm_ok:
+        print(f"
+{RED}INVALID: a phase has no completed agent runs.{RESET}")
+        _persist(args, "INVALID", cold, warm, lessons, reason="no completed agent runs in a phase")
+        return 1
+    excluded = len(cold) - len(cold_ok) + len(warm) - len(warm_ok)
+    if excluded:
+        print(f"
+{excluded} run(s) excluded: the agent crashed or hung.")
+    cold, warm = cold_ok, warm_ok
     cold_mean = statistics.mean(r["anomaly"] for r in cold)
     warm_mean = statistics.mean(r["anomaly"] for r in warm)
     delta = cold_mean - warm_mean

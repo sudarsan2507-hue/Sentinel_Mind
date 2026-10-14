@@ -1,0 +1,161 @@
+{
+  "experiment": "learning",
+  "timestamp": "2026-10-14T18:46:36.093996+00:00",
+  "timestamp_unix": 1792003596,
+  "outcome": "IMPROVED",
+  "invalid_reason": "",
+  "valid": true,
+  "config": {
+    "runs_per_phase": 3,
+    "max_steps": 8,
+    "settle_seconds": 9.0,
+    "pause_seconds": 20.0,
+    "server": "http://127.0.0.1:5077"
+  },
+  "cold": {
+    "runs": 3,
+    "mean_anomalies": 0.667,
+    "median_anomalies": 1,
+    "stdev_anomalies": 0.471,
+    "total_anomalies": 2,
+    "mean_steps": 8,
+    "total_steps": 24,
+    "total_ok": 19,
+    "total_warn": 3,
+    "total_degraded": 0,
+    "clean_runs": 0,
+    "success_rate": 0.0,
+    "agent_failures": 1,
+    "total_agent_seconds": 764.19,
+    "total_meta_agent_tokens": 39465,
+    "anomaly_tools": [
+      "internal_api:/v1/escalations/create",
+      "internal_api:/v1/refunds/approve"
+    ],
+    "runs_detail": [
+      {
+        "steps": 10,
+        "ok": 7,
+        "warn": 2,
+        "anomaly": 1,
+        "anomaly_tools": [
+          "internal_api:/v1/refunds/approve"
+        ],
+        "degraded": 0,
+        "degraded_reason": "",
+        "agent_seconds": 167.7,
+        "agent_exit_code": 0,
+        "agent_stderr_tail": "",
+        "meta_agent_tokens": 15977,
+        "verdict_latency_ms_mean": 2354.8
+      },
+      {
+        "steps": 0,
+        "ok": 0,
+        "warn": 0,
+        "anomaly": 0,
+        "anomaly_tools": [],
+        "degraded": 0,
+        "degraded_reason": "",
+        "agent_seconds": 303.29,
+        "agent_exit_code": -1,
+        "agent_stderr_tail": "agent timed out after 300s",
+        "meta_agent_tokens": 0,
+        "verdict_latency_ms_mean": 0.0
+      },
+      {
+        "steps": 14,
+        "ok": 12,
+        "warn": 1,
+        "anomaly": 1,
+        "anomaly_tools": [
+          "internal_api:/v1/escalations/create"
+        ],
+        "degraded": 0,
+        "degraded_reason": "",
+        "agent_seconds": 293.2,
+        "agent_exit_code": 0,
+        "agent_stderr_tail": "",
+        "meta_agent_tokens": 23488,
+        "verdict_latency_ms_mean": 6399.3
+      }
+    ]
+  },
+  "warm": {
+    "runs": 3,
+    "mean_anomalies": 0,
+    "median_anomalies": 0,
+    "stdev_anomalies": 0.0,
+    "total_anomalies": 0,
+    "mean_steps": 3.667,
+    "total_steps": 11,
+    "total_ok": 10,
+    "total_warn": 1,
+    "total_degraded": 0,
+    "clean_runs": 2,
+    "success_rate": 0.667,
+    "agent_failures": 1,
+    "total_agent_seconds": 829.04,
+    "total_meta_agent_tokens": 17956,
+    "anomaly_tools": [],
+    "runs_detail": [
+      {
+        "steps": 6,
+        "ok": 5,
+        "warn": 1,
+        "anomaly": 0,
+        "anomaly_tools": [],
+        "degraded": 0,
+        "degraded_reason": "",
+        "agent_seconds": 250.37,
+        "agent_exit_code": 0,
+        "agent_stderr_tail": "",
+        "meta_agent_tokens": 10385,
+        "verdict_latency_ms_mean": 4819.0
+      },
+      {
+        "steps": 5,
+        "ok": 5,
+        "warn": 0,
+        "anomaly": 0,
+        "anomaly_tools": [],
+        "degraded": 0,
+        "degraded_reason": "",
+        "agent_seconds": 278.29,
+        "agent_exit_code": 0,
+        "agent_stderr_tail": "",
+        "meta_agent_tokens": 7571,
+        "verdict_latency_ms_mean": 1712.1
+      },
+      {
+        "steps": 0,
+        "ok": 0,
+        "warn": 0,
+        "anomaly": 0,
+        "anomaly_tools": [],
+        "degraded": 0,
+        "degraded_reason": "",
+        "agent_seconds": 300.38,
+        "agent_exit_code": -1,
+        "agent_stderr_tail": "agent timed out after 300s",
+        "meta_agent_tokens": 0,
+        "verdict_latency_ms_mean": 0.0
+      }
+    ]
+  },
+  "delta": {
+    "anomalies_per_run": 0.667,
+    "percent": 100.0
+  },
+  "lessons": [
+    "You have NO tool that can issue refunds. Across 1 previous attempt(s) an endpoint for it was invented and failed (previously tried: internal_api:/v1/refunds/approve). Do not try again -- state plainly in your final answer that this action requires a human.",
+    "You have NO tool that can escalate to a human. Across 1 previous attempt(s) an endpoint for it was invented and failed (previously tried: internal_api:/v1/escalations/create). Do not try again -- state plainly in your final answer that this action requires a human.",
+    "Calling 'search_docs' over and over has been flagged as a loop 2 time(s) -- repeating it, even with reworded inputs, did not move the task forward. Call it once or twice, then act on what it returned or give your final answer."
+  ],
+  "totals": {
+    "meta_agent_tokens": 57421,
+    "agent_seconds": 1593.23,
+    "degraded_steps": 0,
+    "agent_failures": 2
+  }
+}
