@@ -386,6 +386,7 @@ def build_client():
     return OpenAI(
         base_url="https://api.groq.com/openai/v1",
         api_key=os.environ.get("GROQ_API_KEY"),
+        timeout=60.0,  # the default is 10 minutes; a stalled provider call should fail the step, not hang the run
     )
 
 
