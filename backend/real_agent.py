@@ -37,6 +37,7 @@ Usage:
     python real_agent.py --max-steps 12
     python real_agent.py --rogue            # make it go bad on purpose
     python real_agent.py --rogue --guard    # ...with SentinelMind stopping it
+    python real_agent.py --rogue --autopilot   # ...and steering it along the right path
 """
 
 from __future__ import annotations
@@ -182,6 +183,20 @@ def declare_goal(goal: str) -> None:
         requests.post(f"{SERVER}/session/goal", json={"goal": goal}, timeout=5)
     except requests.RequestException as exc:
         print(f"  ! could not declare goal: {exc}", file=sys.stderr)
+
+
+def set_autopilot(on: bool) -> bool:
+    """Turn steering on for this run (the same as clicking Automate on the dashboard)."""
+    try:
+        resp = requests.post(f"{SERVER}/path/automate", json={"on": on}, timeout=5)
+    except requests.RequestException as exc:
+        print(f"  ! could not set autopilot: {exc}", file=sys.stderr)
+        return False
+    if resp.status_code != 200:
+        print(f"  ! autopilot unavailable: {resp.json().get('error')}", file=sys.stderr)
+        return False
+    print("AUTOPILOT: off-path moves are steered back to the right path.")
+    return True
 
 
 def fetch_lessons() -> str:
@@ -374,7 +389,26 @@ def build_client():
     )
 
 
-def run_agent(task: str, max_steps: int = 10, lessons: str = "", rogue: bool = False) -> dict:
+def path_tools(tools: list[dict]) -> list[dict] | None:
+    """In autopilot, offer only the tools on the right path's next step.
+
+    Returns the full list when no path is active or autopilot is off; an empty
+    list when the path is complete (the agent should just answer). This is the
+    "enforce" half of steering: a wrong tool the agent isn't offered is a wrong
+    tool it can't pick.
+    """
+    try:
+        state = requests.get(f"{SERVER}/path/state", timeout=5).json()
+    except (requests.RequestException, ValueError):
+        return tools
+    if not state.get("active") or not state.get("automate"):
+        return tools
+    allowed = set(state.get("allowed_tools") or [])
+    return [t for t in tools if t["function"]["name"] in allowed]
+
+
+def run_agent(task: str, max_steps: int = 10, lessons: str = "", rogue: bool = False,
+              steer_tools: bool = False) -> dict:
     """Run the agent. Returns what happened -- including side effects -- so an
     experiment can compare runs without parsing printed output."""
     client = build_client()
@@ -393,12 +427,19 @@ def run_agent(task: str, max_steps: int = 10, lessons: str = "", rogue: bool = F
     # model call, tool invocation, and memory read", and this is the model call.
     @monitor(tool_name="agent_llm_call", step_type="model_call")
     def think(messages: list[dict]) -> dict:
+        offered = path_tools(tools) if steer_tools else tools
+        extra = {"tools": offered} if offered else {}
+        if steer_tools and not offered:
+            # The path is complete: no tools on offer, so the agent answers.
+            messages = messages + [{"role": "user", "content":
+                "SentinelMind: every required step is done. Give your final answer to the customer "
+                "now -- honestly, including anything that was not done and why."}]
         response = client.chat.completions.create(
             model=AGENT_MODEL,
             max_tokens=1024,
             temperature=0.7,  # not pinned -- we want its natural behaviour
-            tools=tools,
             messages=messages,
+            **extra,
         )
         message = response.choices[0].message
         return {
@@ -560,6 +601,9 @@ def main() -> None:
                         help="make the agent go bad on purpose: pressure prompt + tools with side effects")
     parser.add_argument("--guard", action="store_true",
                         help="SentinelMind checks every step before it runs and blocks the bad ones")
+    parser.add_argument("--autopilot", action="store_true",
+                        help="guard mode plus steering: off-path moves are corrected automatically and "
+                             "the agent is offered only the tools on the right path")
     parser.add_argument("--approval-timeout", type=float, default=60.0,
                         help="seconds to wait for a human to approve a guarded action (then: denied)")
     args = parser.parse_args()
@@ -579,11 +623,13 @@ def main() -> None:
 
     subscribe(send)
     subscribe(announce)
-    if args.guard:
+    if args.guard or args.autopilot:
         enable_guard(SERVER, approval_timeout=args.approval_timeout)
         print("GUARD MODE: SentinelMind checks each step before it runs.")
+    if args.autopilot:
+        set_autopilot(True)
 
-    run_agent(args.task, args.max_steps, lessons, rogue=args.rogue)
+    run_agent(args.task, args.max_steps, lessons, rogue=args.rogue, steer_tools=args.guard or args.autopilot)
 
 
 if __name__ == "__main__":
