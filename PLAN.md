@@ -366,3 +366,29 @@ refund has gone out. Guard mode moves the check in front of the call.
 - **Measured by** `evals/run_guard_experiment.py`: the rogue agent (`real_agent.py --rogue`:
   pressure prompt + side-effect tools + an out-of-policy customer) with guard off vs on, scored
   on its own ledger (money moved, data erased), not on verdicts.
+
+## 13. The right path (2026-10-14)
+
+Guard mode can say no. It cannot say what the agent should do instead. The right path adds
+that: a small graph of the correct steps for a known task, next to the failure memory of
+wrong ones.
+
+- **Format:** `backend/paths/*.json`. Steps with `requires` (preconditions), optional `when`
+  conditions evaluated as plain arithmetic on facts read from tool outputs (e.g.
+  `days_since_purchase <= 30` from `get_order`), `max_visits` and `optional`. Chosen by matching
+  the session goal (`applies_when`). First path: `support_refund`.
+- **Classification** (`backend/path_graph.py`): each proposed call is `on_path`, `premature`,
+  `forbidden`, `done_already` or `off_path`. An off-path tool the failure memory has seen fail
+  2+ times becomes `known_wrong`. Off-path tools otherwise run as detours.
+- **Deviation:** the guard holds the step and asks the dashboard: Stop / Let it continue /
+  Automate. Unanswered → `SENTINEL_PATH_TIMEOUT_ACTION` (default `automate`).
+- **Automate:** the step is blocked with an instruction naming the next correct step, and
+  autopilot turns on. In autopilot the agent is offered only the tools for the next step(s);
+  when the path is finished it is offered none and told to answer. Steering a premature or
+  repeated step is not a strike; a forbidden or known-wrong one is.
+- **Learning, with a person in the loop:** "Let it continue" proposes the step as a path
+  addition; accepted proposals go to `knowledge/path_learned.json` (gitignored) as optional
+  steps. Forbidden steps are never proposed.
+- **UI:** dashboard path panel (steps Done / Next / Not allowed, route taken, Autopilot switch)
+  and a deviation banner; the failure-memory page shows the right path and pending proposals.
+- **Measured by** `evals/run_guard_experiment.py` arms `off` / `guard` / `autopilot`.

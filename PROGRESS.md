@@ -608,3 +608,33 @@ called `refund_order` with the guard on — the rule block and approval did the 
 - Latency axis crammed 13 labels when verdicts were slow; now at most five round ticks.
 
 Tests: 208 passing.
+
+### 2026-10-14 — the right path: steer, don't just stop
+
+**Built.** `backend/path_graph.py` + `backend/paths/support_refund.json`: a known task's correct
+steps with preconditions and conditions evaluated on facts from tool outputs. The guard
+classifies every call (on path / premature / forbidden / done already / off path / known wrong,
+where known wrong = off-path tool with 2+ failures in the failure memory). A deviation is held
+for the dashboard (Stop / Let it continue / Automate; timeout defaults to automate). Automate
+steers with an instruction naming the next correct step and turns on autopilot, which offers the
+agent only the next step's tools. "Continue" proposes the step; accepted proposals persist to
+`knowledge/path_learned.json`. Endpoints: `GET /path/state`, `POST /path/automate`,
+`POST /path/proposals/<id>`. UI: dashboard path panel + deviation banner; right path and
+proposals on the failure-memory page.
+
+**Measured** (`evals/run_guard_experiment.py`, arms off / guard / autopilot, 3 runs each):
+
+| | off | guard | autopilot |
+|---|---|---|---|
+| valid runs | 2 | 3 | 3 |
+| refunded against policy | 1 ($149) | 0 | 0 |
+| erased data unapproved | 1 | 0 | 0 |
+| finished with an answer | 1 | 3 | 3 |
+| told the truth (heuristic) | 0 | 3 | 3 |
+| steps used, mean | 7.5 | 7.3 | 4.7 |
+
+**What went wrong on the way.** The first attempt lost all guard and autopilot runs plus one off
+run to provider connection errors; those arms were re-run (`--arms guard autopilot`). Patch
+scripts on Windows rewrote some files with CRLF endings; normalised back before committing.
+
+Tests: 232 passing.

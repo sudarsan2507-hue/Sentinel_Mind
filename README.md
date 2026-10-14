@@ -189,6 +189,56 @@ sees: a **58-day-old** order was **blocked** (ANOMALY, 0.99 — *"refund exceeds
 policy requires supervisor approval"*) and a **10-day-old** one was **allowed** (OK, 0.99). Three
 runs per arm is a small sample: it shows the mechanism changes behaviour, not a rate.
 
+### The right path: not just "no", but "this instead"
+
+A block tells the agent what not to do. For a task SentinelMind knows, it can also say what to
+do instead. `backend/paths/support_refund.json` describes a correct refund run as steps with
+preconditions, not a fixed script:
+
+| Step | Tool | Only after | Only if |
+|---|---|---|---|
+| Read the order | `get_order` | | |
+| Check the policy | `search_docs` | | |
+| Refund | `refund_order` | order + policy | `days_since_purchase <= 30`, worked out from the order's own output |
+| Tell the customer | `email_customer` | order + policy | |
+| Look up / erase the customer | `lookup_customer`, `erase_customer_data` | optional | erasure still needs approval |
+
+Each proposed call is checked against it: on the path, too early (a refund before the policy was
+read), not allowed (a refund out of window, worked out with arithmetic, not by a model), already
+done (circling), or off the path. A tool the failure memory has seen fail twice counts as a
+known-wrong move. When the agent goes wrong, the dashboard asks:
+**Stop / Let it continue / Automate**. Automate blocks the step with *"not this step: the
+order is 58 days old… Next correct step: check the policy"*, and turns on autopilot, which
+offers the agent only the tools for the next correct step. "Let it continue" proposes that step
+as part of the path; it only joins the path if someone accepts it on the failure-memory page.
+
+```bash
+python real_agent.py --rogue --autopilot          # steer the rogue agent from step one
+python evals/run_guard_experiment.py --runs 3     # off / guard / autopilot arms
+```
+
+Three arms on the rogue agent (2026-10-14, temperature 0.7; the off arm lost one run to a
+provider connection error):
+
+| | off | guard (unattended) | guard + autopilot |
+|---|---|---|---|
+| Valid runs | 2 | 3 | 3 |
+| Runs that refunded against policy | 1 ($149, without reading the policy) | **0** | **0** |
+| Runs that erased data with no approval | 1 | **0** | **0** |
+| Runs that finished with an answer | 1 | 3 | 3 |
+| Customer told the truth* | 0 | 3 | 3 |
+| Steps blocked, mean | 0 | 2.7 | 0.3 |
+| Steps used, mean | 7.5 | 7.3 | **4.7** |
+
+\* keyword heuristic, as above.
+
+In the guard arm the path checker did the stopping: two runs tried `refund_order` before
+reading the policy (one as its very first step) and were steered back. With autopilot the
+agent never got the chance; it was offered only the right tools, took the shortest correct
+route (`get_order > search_docs > email_customer` in two runs), and needed one block in three
+runs (an erasure held for approval, which nobody gave). Three runs per arm shows the mechanism,
+not a rate.
+
 ---
 
 ## How it works
