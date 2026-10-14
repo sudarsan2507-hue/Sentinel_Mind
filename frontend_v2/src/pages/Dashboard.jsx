@@ -7,6 +7,7 @@ import {
   RunTimeline, LatencyChart, ToolBreakdown, Confidence,
 } from '../components/dashboard/viz';
 import { STATUS, quantile, fmtS } from '../components/dashboard/status';
+import PathPanel from '../components/dashboard/PathPanel';
 
 const headerButton = 'inline-flex min-h-11 items-center rounded-md border border-outline-variant/50 px-3 text-[14px] text-on-background hover:bg-surface-container-high active:bg-surface-container-high transition-colors';
 
@@ -45,6 +46,8 @@ const RULE_LABEL = {
   approval_denied: 'human said no',
   approval_timeout: 'no human approval',
   circuit_breaker: 'run halted',
+  path: 'steered back to the path',
+  user_stop: 'stopped by you',
 };
 
 const fromEntry = (e) => ({
@@ -83,13 +86,16 @@ export default function Dashboard() {
   const [halt, setHalt] = useState(null);
   const [approvals, setApprovals] = useState([]);
   const [deciding, setDeciding] = useState(null);
+  // The right path for this run, if the goal matches a known task.
+  const [pathState, setPathState] = useState(null);
+  const [pathBusy, setPathBusy] = useState(false);
   const feedRef = useRef(null);
 
   useEffect(() => {
     document.title = 'Live dashboard · SentinelMind';
   }, []);
 
-  const reset = useCallback(() => { setSteps([]); setSelected(null); setHalt(null); setApprovals([]); }, []);
+  const reset = useCallback(() => { setSteps([]); setSelected(null); setHalt(null); setApprovals([]); setPathState(null); }, []);
 
   useEffect(() => {
     const offs = [
@@ -104,11 +110,16 @@ export default function Dashboard() {
           ? prev.map((s) => (s.id === next.id ? next : s))
           : [...prev, next];
       })),
-      on('goal', (d) => { setGoal(d.goal); reset(); }),
+      on('goal', (d) => {
+        setGoal(d.goal);
+        reset();
+        fetch('/path/state').then((r) => r.json()).then(setPathState).catch(() => {});
+      }),
       on('cleared', reset),
       on('halted', (d) => setHalt(d)),
       on('approval_request', (a) => setApprovals((prev) => (prev.some((p) => p.id === a.id) ? prev : [...prev, a]))),
       on('approval_resolved', (r) => setApprovals((prev) => prev.filter((p) => p.id !== r.id))),
+      on('path', (st) => setPathState({ active: true, ...st })),
     ];
     return () => offs.forEach((off) => off && off());
   }, [on, reset]);
@@ -120,6 +131,7 @@ export default function Dashboard() {
     // Draw the page once the session and its verdicts are in. Drawing it empty
     // first and filling in moved every tile below the goal box (layout shift
     // 0.08 on phones); both answers take a few milliseconds locally.
+    fetch('/path/state').then((r) => r.json()).then(setPathState).catch(() => {});
     fetch('/guard/state').then((r) => r.json()).then((g) => {
       if (g.halted) setHalt({ reason: g.halt_reason, strikes: g.strikes });
       if (g.pending_approvals?.length) setApprovals(g.pending_approvals);
@@ -156,6 +168,18 @@ export default function Dashboard() {
     })
       .then(() => setApprovals((prev) => prev.filter((p) => p.id !== id)))
       .finally(() => setDeciding(null));
+  };
+
+  const setAutopilot = (on) => {
+    setPathBusy(true);
+    fetch('/path/automate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ on }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setPathState((st) => (st ? { ...st, automate: d.automate } : st)))
+      .finally(() => setPathBusy(false));
   };
 
   /* Selecting a step anywhere scrolls the feed to it. */
@@ -232,7 +256,33 @@ export default function Dashboard() {
             <p className="mt-1 text-[15px] leading-snug text-on-background">{halt.reason}</p>
           </div>
         )}
-        {approvals.map((a) => (
+        {approvals.filter((a) => a.kind === 'deviation').map((a) => (
+          <div key={a.id} role="alert" className="anomaly-banner rounded-xl border border-amber-400/60 bg-amber-400/10 px-5 py-4 flex flex-wrap items-center gap-x-6 gap-y-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[15px] font-semibold text-on-background">The agent left the right path</p>
+              <p className="mt-1 text-[15px] text-on-surface-variant">
+                It wants to run <code className="font-label-sm text-[13px] text-on-background">{a.tool}</code>, but{' '}
+                {a.finding?.why || 'that is not the correct next step'}.
+                {a.expected?.length > 0 && <> The right next step is <span className="text-on-background">{a.expected[0].toLowerCase()}</span>.</>}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" disabled={deciding === a.id} onClick={() => decide(a.id, 'stop')}
+                className="inline-flex min-h-11 items-center rounded-md border border-error/50 px-4 text-[14px] text-error hover:bg-error/10 disabled:opacity-50">
+                Stop
+              </button>
+              <button type="button" disabled={deciding === a.id} onClick={() => decide(a.id, 'continue')}
+                className="inline-flex min-h-11 items-center rounded-md border border-outline-variant/60 px-4 text-[14px] text-on-background hover:bg-surface-container-high disabled:opacity-50">
+                Let it continue
+              </button>
+              <button type="button" disabled={deciding === a.id} onClick={() => decide(a.id, 'automate')}
+                className="inline-flex min-h-11 items-center rounded-md bg-primary-container px-4 text-[14px] font-semibold text-[#00210a] hover:brightness-110 disabled:opacity-50">
+                Automate
+              </button>
+            </div>
+          </div>
+        ))}
+        {approvals.filter((a) => a.kind !== 'deviation').map((a) => (
           <div key={a.id} role="alert" className="anomaly-banner rounded-xl border border-[#60a5fa]/60 bg-[#60a5fa]/10 px-5 py-4 flex flex-wrap items-center gap-x-6 gap-y-3">
             <div className="min-w-0 flex-1">
               <p className="text-[15px] font-semibold text-on-background">Waiting for your approval</p>
@@ -285,6 +335,8 @@ export default function Dashboard() {
             </div>
           )}
         </div>
+
+        <PathPanel state={pathState} onAutomate={setAutopilot} busy={pathBusy} />
 
         {/* ── KPI tiles ── */}
         <div className={`grid grid-cols-2 gap-3 md:gap-5 ${counts.BLOCKED ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}>
