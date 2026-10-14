@@ -324,14 +324,12 @@ def main() -> int:
     cold_ok = [r for r in cold if r["agent_exit_code"] == 0]
     warm_ok = [r for r in warm if r["agent_exit_code"] == 0]
     if not cold_ok or not warm_ok:
-        print(f"
-{RED}INVALID: a phase has no completed agent runs.{RESET}")
+        print(f"\n{RED}INVALID: a phase has no completed agent runs.{RESET}")
         _persist(args, "INVALID", cold, warm, lessons, reason="no completed agent runs in a phase")
         return 1
     excluded = len(cold) - len(cold_ok) + len(warm) - len(warm_ok)
     if excluded:
-        print(f"
-{excluded} run(s) excluded: the agent crashed or hung.")
+        print(f"\n{excluded} run(s) excluded: the agent crashed or hung.")
     cold, warm = cold_ok, warm_ok
     cold_mean = statistics.mean(r["anomaly"] for r in cold)
     warm_mean = statistics.mean(r["anomaly"] for r in warm)
