@@ -22,7 +22,13 @@ export default function RightPath() {
     );
   }
 
-  const { path, proposals = [] } = state;
+  const { path, proposals = [], visits = {}, ruled_out: ruled = {}, route = [] } = state;
+  const last = (n) => {
+    if (visits[n.id]) return { dot: 'bg-primary-container', text: 'done in the last run', cls: 'text-primary-container' };
+    if (ruled[n.id]) return { dot: 'bg-error', text: `ruled out: ${ruled[n.id]}`, cls: 'text-error' };
+    return { dot: 'bg-on-surface-variant/40', text: route.length ? 'not taken' : '', cls: 'text-on-surface-variant' };
+  };
+  const offPath = route.filter((r) => r.kind !== 'on_path');
   const resolve = (id, accept) => {
     setBusy(id);
     fetch(`/path/proposals/${id}`, {
@@ -42,18 +48,26 @@ export default function RightPath() {
       <p className="mt-1 max-w-[760px] text-[15px] text-on-surface-variant">{path.description}</p>
 
       <ol className="mt-4 flex flex-col gap-2">
-        {path.nodes.map((n) => (
+        {path.nodes.map((n) => { const st = last(n); return (
           <li key={n.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-lg border border-outline-variant/30 px-3 py-2">
-            <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-primary-container" />
+            <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full ${st.dot}`} />
             <span className="text-[15px] text-on-background">{n.label}</span>
             <code className="font-label-sm text-[12px] text-on-surface-variant">{n.tools.join(', ')}</code>
             {requires(n).length > 0 && <span className="text-[13px] text-on-surface-variant">after {requires(n).join(' + ').toLowerCase()}</span>}
             {n.when && <span className="text-[13px] text-amber-300">only if {n.when.replace(/_/g, ' ')}</span>}
             {n.optional && <span className="text-[13px] text-on-surface-variant">optional</span>}
             {n.learned && <span className="text-[13px] text-primary-container">added from an approved run</span>}
+            {st.text && <span className={`basis-full pl-5 text-[13px] ${st.cls}`}>{st.text}</span>}
           </li>
-        ))}
+        ); })}
       </ol>
+
+      {route.length > 0 && (
+        <p className="mt-3 text-[14px] text-on-surface-variant">
+          Last run: <span className="font-label-sm text-[13px] text-on-background">{route.map((r) => r.tool.replace(/^internal_api:/, 'api ')).join(' › ')}</span>
+          {offPath.length === 0 ? ' · stayed on the path' : ` · ${offPath.length} step${offPath.length === 1 ? '' : 's'} off the path`}
+        </p>
+      )}
 
       <h3 className="mt-5 text-[15px] font-semibold text-on-background">Proposed from your decisions</h3>
       {proposals.length === 0 ? (
