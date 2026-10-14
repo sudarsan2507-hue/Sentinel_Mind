@@ -23,6 +23,11 @@ Checks, cheapest and most certain first:
 3. **A circuit breaker.** Every block, and every post-hoc ANOMALY on a tool
    call, is a strike. Enough strikes and the run halts.
 4. **Human approval** for the tools that should never run on a model's say-so.
+5. **The right path** (``path_graph.py``). When the goal matches a known task,
+   each move is checked against the correct path. A move off it is held and the
+   user is asked: *Automate* (steer the agent back -- and keep steering), *Let it
+   continue*, or *Stop*. In autopilot the steering happens without asking.
+   Moves the failure memory has seen fail repeatedly count as known-wrong.
 
 A block is not a crash. The reason travels back to the agent as the tool's
 result, worded as an instruction, so its next step can change course. That is
@@ -45,6 +50,7 @@ from collections import Counter, deque
 from typing import Any
 
 from knowledge_graph import UNRECOGNISED_CAPABILITY, classify_capability
+from path_graph import DEVIATIONS, FORBIDDEN, KNOWN_WRONG, OFF_PATH, PathTracker, choose_path
 from session_context import SessionContext
 
 ALLOW, BLOCK, PENDING, HALT = "allow", "block", "pending", "halt"
@@ -114,6 +120,10 @@ class Guard:
         min_confidence: float = 0.6,
         repeat_limit: int = 2,
         history: int = 12,
+        memory: Any = None,
+        learned_store: Any = None,
+        path_timeout_action: str = "automate",
+        paths_dir: Any = None,
     ) -> None:
         self.known_tools = set(known_tools)
         self.meta_agent = meta_agent
@@ -123,8 +133,18 @@ class Guard:
         self.min_confidence = min_confidence
         self.repeat_limit = repeat_limit
         self._history_size = history
+        # Failure memory (KnowledgeGraph): moves that failed before count as known-wrong.
+        self.memory = memory
+        # Where human-approved path additions are kept (a JSON file, local state).
+        self.learned_store = learned_store
+        # What an unanswered off-path question becomes. "automate": steering is the
+        # safe default for an unattended run; letting it carry on is not.
+        self.path_timeout_action = path_timeout_action
+        self.paths_dir = paths_dir
+        self.proposals: dict[str, dict] = {}
         self._lock = threading.Lock()
         self.goal = ""
+        self.path: PathTracker | None = None
         self.reset()
 
     # -- run state ----------------------------------------------------------
@@ -141,6 +161,8 @@ class Guard:
             self.halt_reason = ""
             self.blocked: list[dict] = []
             self.approvals: dict[str, dict] = {}
+            graph = choose_path(self.goal, self._learned(), **({"directory": self.paths_dir} if self.paths_dir else {})) if self.goal else None
+            self.path = PathTracker(graph) if graph else None
 
     def state(self) -> dict:
         with self._lock:
@@ -154,9 +176,11 @@ class Guard:
                 "risky_tools": sorted(self.risky_tools),
                 "approval_tools": sorted(self.approval_tools),
                 "pending_approvals": [
-                    {"id": k, **{f: v[f] for f in ("tool", "input", "created")}}
+                    {"id": k, **{f: v.get(f) for f in ("tool", "input", "created", "kind", "finding", "expected")}}
                     for k, v in self.approvals.items() if v["status"] == "pending"
                 ],
+                "path": self.path.graph.id if self.path else None,
+                "automate": bool(self.path and self.path.automate),
             }
 
     def observe(self, event: dict) -> None:
@@ -170,6 +194,8 @@ class Guard:
             return
         if event.get("step_type") == "model_call":
             return
+        if self.path:
+            self.path.observe(event)
         with self._lock:
             self._history.append({
                 "tool": event.get("tool"),
@@ -228,6 +254,11 @@ class Guard:
                 f"have, or give your final answer.",
             )
 
+        if self.path:
+            decision = self._check_path(call)
+            if decision is not None:
+                return decision
+
         if tool in self.approval_tools or call.get("approval"):
             return self._request_approval(call)
 
@@ -266,12 +297,115 @@ class Guard:
             self._attempts[SessionContext.fingerprint(call)] += 1
         return {"action": ALLOW, "rule": "judge", "verdict": verdict}
 
-    def _block(self, call: dict, rule: str, reason: str, verdict: dict | None = None) -> dict:
+    # -- the right path ------------------------------------------------------
+
+    def _known_failures(self, tool: str) -> int:
+        if self.memory is None or not hasattr(self.memory, "failures_for"):
+            return 0
+        return sum(self.memory.failures_for(tool).values())
+
+    def _check_path(self, call: dict) -> dict | None:
+        """None = no objection from the path. Otherwise a steer, or a question for the user."""
+        tool = call.get("tool", "")
+        finding = self.path.classify(tool)
+        if finding["kind"] == OFF_PATH:
+            failures = self._known_failures(tool)
+            if failures < 2:
+                return None  # unknown, not known-wrong: let it run, it shows as a detour
+            finding = {**finding, "kind": KNOWN_WRONG,
+                       "why": f"{tool} is not on the path and has failed {failures} times in earlier runs"}
+        if finding["kind"] not in DEVIATIONS:
+            return None
+        if self.path.automate:
+            return self._steer(call, finding)
+        approval_id = f"dev_{uuid.uuid4().hex[:10]}"
+        with self._lock:
+            self.approvals[approval_id] = {
+                "kind": "deviation", "tool": tool, "input": call.get("input"), "call": call,
+                "finding": finding, "expected": [n["label"] for n in self.path.next_steps()],
+                "status": "pending", "created": time.time(),
+            }
+        self.path.note(tool, "held", finding.get("node"))
+        return {"action": PENDING, "rule": "path", "approval_id": approval_id, "kind": "deviation",
+                "finding": finding, "reason": f"{tool} is off the correct path: {finding['why']}."}
+
+    def _steer(self, call: dict, finding: dict) -> dict:
+        self.path.note(call.get("tool", ""), "steered", finding.get("node"))
+        # Steering a harmless detour is not a strike; a forbidden or known-wrong move is.
+        return self._block(call, "path", self.path.instruction(finding),
+                           strike=finding["kind"] in (FORBIDDEN, KNOWN_WRONG))
+
+    def set_automate(self, on: bool) -> bool:
+        if not self.path:
+            return False
+        self.path.automate = on
+        return True
+
+    def path_state(self) -> dict | None:
+        if not self.path:
+            return None
+        return {**self.path.snapshot(), "proposals": self.list_proposals()}
+
+    def _propose(self, call: dict) -> None:
+        """The user let an off-path move continue: offer it as a new path step."""
+        if not self.path:
+            return
+        tool = call.get("tool", "")
+        key = f"{self.path.graph.id}:{tool}"
+        with self._lock:
+            entry = self.proposals.setdefault(key, {
+                "id": f"prop_{uuid.uuid4().hex[:8]}", "path": self.path.graph.id, "tool": tool,
+                "count": 0, "status": "open"})
+            entry["count"] += 1
+
+    def list_proposals(self) -> list[dict]:
+        with self._lock:
+            return [dict(v) for v in self.proposals.values() if v["status"] == "open"]
+
+    def resolve_proposal(self, proposal_id: str, accept: bool) -> dict | None:
+        with self._lock:
+            entry = next((v for v in self.proposals.values() if v["id"] == proposal_id), None)
+            if not entry or entry["status"] != "open":
+                return None
+            entry["status"] = "accepted" if accept else "rejected"
+        if accept:
+            learned = self._learned()
+            nodes = learned.setdefault(entry["path"], [])
+            if not any(entry["tool"] in n.get("tools", []) for n in nodes):
+                nodes.append({"id": f"learned_{entry['tool']}", "label": f"{entry['tool']} (approved in a run)",
+                              "tools": [entry["tool"]], "requires": [], "optional": True, "max_visits": 2})
+            self._save_learned(learned)
+            if self.path and self.path.graph.id == entry["path"]:
+                keep = self.path
+                graph = choose_path(self.goal, learned, **({"directory": self.paths_dir} if self.paths_dir else {}))
+                if graph:
+                    keep.graph = graph
+        return dict(entry)
+
+    def _learned(self) -> dict:
+        if not self.learned_store:
+            return getattr(self, "_learned_mem", {})
+        try:
+            return json.loads(self.learned_store.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def _save_learned(self, learned: dict) -> None:
+        if not self.learned_store:
+            self._learned_mem = learned
+            return
+        try:
+            self.learned_store.parent.mkdir(parents=True, exist_ok=True)
+            self.learned_store.write_text(json.dumps(learned, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _block(self, call: dict, rule: str, reason: str, verdict: dict | None = None, strike: bool = True) -> dict:
         fp = SessionContext.fingerprint(call)
         with self._lock:
             self._attempts[fp] += 1
             self.blocked.append({"tool": call.get("tool"), "rule": rule, "reason": reason, "at": time.time()})
-        halt = self._strike(f"{call.get('tool')} blocked ({rule})")
+        halt = self._strike(f"{call.get('tool')} blocked ({rule})") if strike else None
         result = {"action": BLOCK, "rule": rule, "reason": reason}
         if verdict is not None:
             result["verdict"] = verdict
@@ -314,6 +448,29 @@ class Guard:
             entry = self.approvals.get(approval_id)
             return entry["status"] if entry else None
 
+    def decide_deviation(self, approval_id: str, choice: str) -> dict | None:
+        """The user's answer to "the agent left the path": automate, continue or stop."""
+        with self._lock:
+            entry = self.approvals.get(approval_id)
+            if not entry or entry.get("kind") != "deviation" or entry["status"] != "pending":
+                return None
+            entry["status"] = {"automate": "automated", "continue": "continued", "stop": "stopped"}[choice]
+            call, finding = entry["call"], entry["finding"]
+        if choice == "automate":
+            self.path.automate = True
+            return {**self._steer(call, finding), "approval_id": approval_id}
+        if choice == "continue":
+            if finding["kind"] != FORBIDDEN:
+                self._propose(call)
+            with self._lock:
+                self._attempts[SessionContext.fingerprint(call)] += 1
+            return {"action": ALLOW, "rule": "path_override", "approval_id": approval_id}
+        with self._lock:
+            self.halted = True
+            self.halt_reason = ("The user stopped this run. Stop now: tell the customer honestly what "
+                                "was and wasn't done, and that a person will follow up.")
+        return {"action": HALT, "rule": "user_stop", "reason": self.halt_reason, "approval_id": approval_id}
+
     def decide(self, approval_id: str, approve: bool) -> dict | None:
         """Record a human decision. Returns the outcome, or None if unknown/already decided."""
         with self._lock:
@@ -333,5 +490,9 @@ class Guard:
                 "approval_id": approval_id}
 
     def expire(self, approval_id: str) -> dict | None:
-        """No decision in time: treat as denied. The safe default for an unattended run."""
+        """No decision in time. An approval becomes a no; a path question takes the
+        configured default (steer, unless set otherwise)."""
+        entry = self.approvals.get(approval_id)
+        if entry and entry.get("kind") == "deviation":
+            return self.decide_deviation(approval_id, self.path_timeout_action)
         return self.decide(approval_id, approve=False)

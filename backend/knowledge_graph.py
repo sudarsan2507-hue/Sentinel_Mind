@@ -323,6 +323,13 @@ class KnowledgeGraph:
                 totals[src[1]] += count
         return sorted(totals.items(), key=lambda kv: -kv[1])
 
+    def failures_for(self, tool: str) -> dict[str, int]:
+        """How often ``tool`` has failed, by failure mode. The guard uses this to
+        treat a move that keeps failing as known-wrong rather than merely unknown."""
+        with self._lock:
+            return {dst[1]: count for (src, rel, dst), count in self._edges.items()
+                    if rel == "exhibits" and src == ("tool", tool)}
+
     def _invented_names(self, capability: str, limit: int = 3) -> list[str]:
         names = [
             src[1]
