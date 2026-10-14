@@ -30,6 +30,7 @@ from flask_socketio import SocketIO
 from audit_log import AuditLog
 from guard import BLOCK, HALT, Guard
 from knowledge_graph import KnowledgeGraph
+from path_graph import PathGraph
 from meta_agent import MetaAgent
 from session_context import SessionContext
 
@@ -155,6 +156,9 @@ def create_app(
     app.config["GUARD"] = guard or Guard(
         KNOWN_TOOLS,
         meta_agent=app.config["META_AGENT"],
+        memory=app.config["KNOWLEDGE"],
+        learned_store=ROOT / "knowledge" / "path_learned.json",
+        path_timeout_action=os.environ.get("SENTINEL_PATH_TIMEOUT_ACTION", "automate"),
         risky_tools=RISKY_TOOLS,
         approval_tools=APPROVAL_TOOLS,
         max_strikes=int(os.environ.get("SENTINEL_GUARD_MAX_STRIKES", 4)),
@@ -242,6 +246,8 @@ def create_app(
         socketio.emit("trace", event)  # draw the node immediately, grey
         # The guard's own record, written now -- judging below may lag by seconds.
         app.config["GUARD"].observe(event)
+        if app.config["GUARD"].path:
+            socketio.emit("path", app.config["GUARD"].path_state())
         work.put({**event, "_epoch": app.config["RUN_EPOCH"]})
         return jsonify({"accepted": True, "event_id": event.get("id")}), 202
 
@@ -398,10 +404,51 @@ def create_app(
             socketio.emit("approval_request", {
                 "id": decision["approval_id"], "tool": call.get("tool"),
                 "input": call.get("input"), "reason": decision.get("reason"),
+                "kind": decision.get("kind", "approval"), "finding": decision.get("finding"),
+                "expected": [n["label"] for n in guard.path.next_steps()] if guard.path else [],
             })
+        if guard.path:
+            socketio.emit("path", guard.path_state())
         if decision.get("halted") or decision["action"] == HALT:
             socketio.emit("halted", {"halted": True, "reason": guard.halt_reason, "strikes": guard.strikes})
         return jsonify(decision), 200
+
+    # -- the right path -----------------------------------------------------
+
+    @app.get("/path/state")
+    def path_state():
+        """The active right path, where the run is on it, and proposed additions."""
+        state = app.config["GUARD"].path_state()
+        if state is None:
+            return jsonify({"active": False, "available": [p.stem for p in PathGraph.available()]}), 200
+        return jsonify({"active": True, **state}), 200
+
+    @app.post("/path/automate")
+    def path_automate():
+        """Autopilot on/off: steer off-path moves without asking each time."""
+        payload = request.get_json(silent=True) or {}
+        on = payload.get("on")
+        if not isinstance(on, bool):
+            return jsonify({"error": "expected {\"on\": true|false}"}), 400
+        guard: Guard = app.config["GUARD"]
+        if not guard.set_automate(on):
+            return jsonify({"error": "no right path is active for this goal"}), 409
+        socketio.emit("path", guard.path_state())
+        return jsonify({"automate": on}), 200
+
+    @app.post("/path/proposals/<proposal_id>")
+    def path_proposal(proposal_id: str):
+        """Accept or reject a step the user let through, as a permanent path addition."""
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload.get("accept"), bool):
+            return jsonify({"error": "expected {\"accept\": true|false}"}), 400
+        guard: Guard = app.config["GUARD"]
+        outcome = guard.resolve_proposal(proposal_id, payload["accept"])
+        if outcome is None:
+            return jsonify({"error": "unknown or already resolved proposal"}), 404
+        if guard.path:
+            socketio.emit("path", guard.path_state())
+        return jsonify(outcome), 200
 
     @app.get("/guard/state")
     def guard_state():
@@ -424,16 +471,24 @@ def create_app(
         """A human's decision (dashboard), or the agent's timeout (deny)."""
         payload = request.get_json(silent=True) or {}
         choice = payload.get("decision")
-        if choice not in ("approve", "deny"):
-            return jsonify({"error": "expected {\"decision\": \"approve\" | \"deny\"}"}), 400
         guard: Guard = app.config["GUARD"]
-        outcome = guard.decide(approval_id, approve=choice == "approve")
+        entry = guard.approvals.get(approval_id)
+        is_deviation = bool(entry and entry.get("kind") == "deviation")
+        allowed = ("automate", "continue", "stop") if is_deviation else ("approve", "deny")
+        if choice not in allowed and not payload.get("timed_out"):
+            return jsonify({"error": f"expected decision to be one of {', '.join(allowed)}"}), 400
+        if payload.get("timed_out"):
+            outcome = guard.expire(approval_id)
+        elif is_deviation:
+            outcome = guard.decide_deviation(approval_id, choice)
+        else:
+            outcome = guard.decide(approval_id, approve=choice == "approve")
         if outcome is None:
             status = guard.approval_status(approval_id)
             if status is None:
                 return jsonify({"error": "unknown approval id"}), 404
             return jsonify({"error": f"already {status}"}), 409
-        if payload.get("timed_out") and outcome["action"] == "block":
+        if payload.get("timed_out") and outcome["action"] == "block" and not is_deviation:
             tool = guard.approvals[approval_id]["tool"]
             outcome["rule"] = "approval_timeout"
             outcome["reason"] = (f"Blocked by SentinelMind: nobody approved {tool} in time, so it "
@@ -442,6 +497,8 @@ def create_app(
         guard.approvals[approval_id]["decision"] = outcome
         socketio.emit("approval_resolved", {"id": approval_id, "decision": choice,
                                             "timed_out": bool(payload.get("timed_out"))})
+        if guard.path:
+            socketio.emit("path", guard.path_state())
         if outcome.get("halted"):
             socketio.emit("halted", {"halted": True, "reason": guard.halt_reason, "strikes": guard.strikes})
         return jsonify(outcome), 200

@@ -134,13 +134,16 @@ def _ask_guard(call: dict, risky: bool, approval: bool) -> dict:
     approval_id = decision.get("approval_id")
     deadline = time.monotonic() + _guard["approval_timeout"]
     while time.monotonic() < deadline:
-        status = (_get(f"/guard/approval/{approval_id}") or {}).get("status")
-        if status == "approved":
-            return {"action": "allow", "rule": "approval", "approval_id": approval_id}
-        if status == "denied":
-            return (_get(f"/guard/approval/{approval_id}") or {}).get("decision") or {
-                "action": "block", "rule": "approval_denied",
-                "reason": "Blocked by SentinelMind: a human reviewer did not approve this action."}
+        state = _get(f"/guard/approval/{approval_id}") or {}
+        status = state.get("status")
+        if status in ("approved", "continued"):
+            return {"action": "allow", "rule": "approval" if status == "approved" else "path_override",
+                    "approval_id": approval_id}
+        if status in ("denied", "automated", "stopped"):
+            # A human said no, chose to steer the agent, or stopped the run.
+            return state.get("decision") or {
+                "action": "halt" if status == "stopped" else "block", "rule": status,
+                "reason": "Blocked by SentinelMind."}
         time.sleep(_guard["poll"])
     # Nobody answered: deny. An unattended run must not default to "yes".
     return _post(f"/guard/approval/{approval_id}", {"decision": "deny", "timed_out": True}) or {
