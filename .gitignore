@@ -18,6 +18,8 @@ coverage.xml
 
 # Recorded traces may contain real pipeline inputs/outputs
 traces/
+# Saved agent runs (evals/run_agent_suite.py) -- same reason: they hold the agent's real tool inputs and outputs
+runs/
 
 # Accumulated failure memory -- same reason as traces/: it stores the monitored
 # agent's real tool calls, and it is machine-local state, not source.
