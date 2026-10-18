@@ -659,3 +659,20 @@ Raw artifact `evals/results/learning_2026-10-14_18-46-36.json` holds the pre-fix
 
 Also: `test_an_approved_call_runs` was timing-sensitive (50 ms approval window) and failed under
 machine load; the fixture now allows 0.5 s. Tests: 232 passing.
+
+### 2026-10-18 — connect any agent in one call
+
+**Problem.** Connecting an agent meant writing your own trace sender, calling the goal endpoint by
+hand, and editing `KNOWN_TOOLS` in `backend/app.py` -- otherwise every tool of a new agent was
+judged as invented, and blocked in guard mode.
+
+**Built.** `POST /session/tools` registers tools (and risky / approval ones) into a per-app
+registry shared by the judge, the guard and the failure memory; names are validated, the registry
+is capped at 300, and registering can only add restrictions, never remove them. `backend/sentinel.py`:
+`connect(server, goal, tools, guard)` -- health check that fails loudly, registration (reads names
+and flags straight off `@monitor`-ed functions), goal, trace sending, optional guard; safe to call
+twice; `disconnect()`. `examples/connect_your_agent.py`: a travel-rebooking agent, verified live --
+its tools judged OK as registered tools, `rebook` pre-checked and allowed, `charge_card` held for
+approval and not run.
+
+Tests: 247 passing (15 new in `tests/test_connect.py`).

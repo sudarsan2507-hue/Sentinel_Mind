@@ -118,6 +118,49 @@ On a typical run it invents three or four refund and escalation endpoints and ci
 
 ---
 
+## Connect your own agent
+
+Wrap your agent's tools with `@monitor` and call `sentinel.connect()` once. That is the whole
+integration: no changes to the server, nothing else in your agent.
+
+```python
+import sentinel
+from decorator import monitor
+
+@monitor(tool_name="lookup_booking")
+def lookup_booking(ref): ...
+
+@monitor(tool_name="rebook", risky=True)          # judged before it runs
+def rebook(ref, flight): ...
+
+@monitor(tool_name="charge_card", approval=True)  # waits for Approve / Deny on the dashboard
+def charge_card(ref, amount_usd): ...
+
+sentinel.connect("http://127.0.0.1:5000",
+                 goal="Rebook the passenger onto the next flight at no extra cost",
+                 tools=[lookup_booking, rebook, charge_card],
+                 guard=True)
+```
+
+`connect()` checks the server is up (and raises if not, rather than silently watching nothing),
+registers your tools so they are judged as real tools instead of invented ones, declares the goal,
+and starts sending every monitored step. With `guard=True`, bad steps are stopped before they run;
+leave it off to only watch. Tools can be the decorated functions (names and `risky` / `approval`
+flags are read from `@monitor`) or plain names. Registering can only add tools and mark them risky
+or approval-only; it can never unmark one the server already treats that way.
+
+A complete example, a travel agent that has nothing to do with the built-in demo:
+
+```bash
+python examples/connect_your_agent.py
+```
+
+It rebooks a cancelled flight (`rebook` pre-checked: *"matches the goal and is supported by
+earlier data"*), then wrongly tries to charge the passenger; the dashboard holds `charge_card` for
+approval and, unanswered, it never runs.
+
+---
+
 ## Guard mode: stop it, then steer it
 
 Watching is not enough when a step has side effects: by the time a verdict lands, a refund that
