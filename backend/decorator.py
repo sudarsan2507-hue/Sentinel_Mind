@@ -235,6 +235,9 @@ def monitor(
             emit(event)
             return result
 
+        wrapper.sentinel_tool = name
+        wrapper.sentinel_risky = risky
+        wrapper.sentinel_approval = approval
         return wrapper
 
     return decorator

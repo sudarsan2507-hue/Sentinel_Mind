@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import threading
 from pathlib import Path
 
@@ -79,6 +80,10 @@ KNOWN_TOOLS = [
     "erase_customer_data",
     "email_customer",
 ]
+
+TOOL_NAME = re.compile(r"[A-Za-z0-9_:./-]{1,80}")
+MAX_TOOLS = 300
+
 
 def _tool_set(env: str, default: str) -> set[str]:
     return {t.strip() for t in os.environ.get(env, default).split(",") if t.strip()}
@@ -143,8 +148,13 @@ def create_app(
     # Accumulated failure memory. Injected so tests get a throwaway graph and
     # never touch the persisted one on disk.
     app.config["KNOWLEDGE"] = knowledge_graph or KnowledgeGraph()
+    # This app's registry: the built-in tools plus any an agent registers when it
+    # connects (POST /session/tools). One list, shared with the judge, so a newly
+    # registered tool is known everywhere at once.
+    tools: list[str] = list(KNOWN_TOOLS)
+    app.config["TOOLS"] = tools
     app.config["META_AGENT"] = meta_agent or MetaAgent(
-        known_tools=KNOWN_TOOLS,
+        known_tools=tools,
         confidence_threshold=float(os.environ.get("SENTINEL_CONFIDENCE_THRESHOLD", 0.0)),
     )
     # Loops and goal drift are cross-step properties -- the meta-agent needs the
@@ -154,7 +164,7 @@ def create_app(
     )
 
     app.config["GUARD"] = guard or Guard(
-        KNOWN_TOOLS,
+        tools,
         meta_agent=app.config["META_AGENT"],
         memory=app.config["KNOWLEDGE"],
         learned_store=ROOT / "knowledge" / "path_learned.json",
@@ -205,7 +215,7 @@ def create_app(
                 # Turn detection into memory. Only mistakes are remembered, and
                 # only ones we actually judged -- see KnowledgeGraph.ingest.
                 graph: KnowledgeGraph = app.config["KNOWLEDGE"]
-                learned = graph.ingest(event, verdict, KNOWN_TOOLS, session.goal)
+                learned = graph.ingest(event, verdict, app.config["TOOLS"], session.goal)
                 if learned:
                     graph.save()
                     socketio.emit("learned", {**learned, "summary": graph.summary()})
@@ -306,12 +316,50 @@ def create_app(
         socketio.emit("goal", {"goal": goal})
         return jsonify({"goal": goal}), 200
 
+    @app.post("/session/tools")
+    def register_tools():
+        """Add an agent's tools to the registry, so its real tools are not taken
+        for invented ones.
+
+        ``{"tools": [...], "risky": [...], "approval": [...]}``. Registering can
+        only add: a tool already marked risky or needing approval stays so, and
+        nothing here can unmark one. Names are checked, and the registry is capped.
+        """
+        payload = request.get_json(silent=True) or {}
+        lists = {key: payload.get(key, []) for key in ("tools", "risky", "approval")}
+        for key, names in lists.items():
+            if not isinstance(names, list) or not all(isinstance(n, str) and TOOL_NAME.fullmatch(n) for n in names):
+                return jsonify({"error": f"'{key}' must be a list of tool names "
+                                         "(letters, digits, _ : . / -, up to 80 characters)"}), 400
+        new = list(dict.fromkeys(lists["tools"] + lists["risky"] + lists["approval"]))
+        registry: list[str] = app.config["TOOLS"]
+        added = [n for n in new if n not in registry]
+        if len(registry) + len(added) > MAX_TOOLS:
+            return jsonify({"error": f"the registry holds at most {MAX_TOOLS} tools"}), 400
+
+        registry.extend(added)
+        judge_tools = getattr(app.config["META_AGENT"], "known_tools", None)
+        if isinstance(judge_tools, list) and judge_tools is not registry:
+            judge_tools.extend(n for n in added if n not in judge_tools)
+        guard: Guard = app.config["GUARD"]
+        guard.known_tools.update(new)
+        guard.risky_tools.update(lists["risky"])
+        guard.approval_tools.update(lists["approval"])
+        socketio.emit("tools", {"added": added})
+        return jsonify({
+            "added": added,
+            "tools": len(registry),
+            "risky": sorted(guard.risky_tools),
+            "approval": sorted(guard.approval_tools),
+        }), 200
+
     @app.get("/session")
     def session_state():
         session: SessionContext = app.config["SESSION"]
         return jsonify(
             {
                 "goal": session.goal,
+                "tools": app.config["TOOLS"],
                 "window": session.window,
                 "recent": session.recent(),
             }
