@@ -21,6 +21,8 @@ from __future__ import annotations
 import os
 import queue
 import re
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -80,6 +82,19 @@ KNOWN_TOOLS = [
     "erase_customer_data",
     "email_customer",
 ]
+
+# Example agents the connect guide can start from the browser. A fixed list:
+# the endpoint takes a name, never a command.
+DEMOS = {
+    "travel": {
+        "title": "Travel agent connected with sentinel.connect()",
+        "command": [sys.executable, "examples/connect_your_agent.py"],
+    },
+    "refund": {
+        "title": "Rogue refund agent, with guard mode on",
+        "command": [sys.executable, "backend/real_agent.py", "--rogue", "--guard", "--approval-timeout", "30"],
+    },
+}
 
 TOOL_NAME = re.compile(r"[A-Za-z0-9_:./-]{1,80}")
 MAX_TOOLS = 300
@@ -153,6 +168,9 @@ def create_app(
     # registered tool is known everywhere at once.
     tools: list[str] = list(KNOWN_TOOLS)
     app.config["TOOLS"] = tools
+    # Tools agents registered themselves, as opposed to the built-in demo ones.
+    app.config["REGISTERED"] = []
+    app.config["DEMO"] = {"name": None, "process": None}
     app.config["META_AGENT"] = meta_agent or MetaAgent(
         known_tools=tools,
         confidence_threshold=float(os.environ.get("SENTINEL_CONFIDENCE_THRESHOLD", 0.0)),
@@ -338,6 +356,8 @@ def create_app(
             return jsonify({"error": f"the registry holds at most {MAX_TOOLS} tools"}), 400
 
         registry.extend(added)
+        registered: list[str] = app.config["REGISTERED"]
+        registered.extend(n for n in new if n not in registered)
         judge_tools = getattr(app.config["META_AGENT"], "known_tools", None)
         if isinstance(judge_tools, list) and judge_tools is not registry:
             judge_tools.extend(n for n in added if n not in judge_tools)
@@ -360,6 +380,7 @@ def create_app(
             {
                 "goal": session.goal,
                 "tools": app.config["TOOLS"],
+                "registered": app.config["REGISTERED"],
                 "window": session.window,
                 "recent": session.recent(),
             }
@@ -498,6 +519,43 @@ def create_app(
             socketio.emit("path", guard.path_state())
         return jsonify(outcome), 200
 
+    # -- example agents, started from the connect guide -------------------------
+
+    def _demo_status() -> dict:
+        demo = app.config["DEMO"]
+        proc = demo["process"]
+        running = proc is not None and proc.poll() is None
+        return {
+            "running": running,
+            "name": demo["name"],
+            "exit_code": None if proc is None or running else proc.returncode,
+            "demos": {k: v["title"] for k, v in DEMOS.items()},
+        }
+
+    @app.get("/demo/status")
+    def demo_status():
+        return jsonify(_demo_status()), 200
+
+    @app.post("/demo/run")
+    def demo_run():
+        """Start one of the example agents. Local only, one at a time."""
+        if request.remote_addr not in ("127.0.0.1", "::1"):
+            return jsonify({"error": "example agents can only be started from this machine"}), 403
+        name = (request.get_json(silent=True) or {}).get("demo")
+        if name not in DEMOS:
+            return jsonify({"error": f"unknown demo; choose one of: {', '.join(DEMOS)}"}), 400
+        if _demo_status()["running"]:
+            return jsonify({"error": "an example agent is already running", **_demo_status()}), 409
+        audit_clear()  # each example is a fresh run on the dashboard
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+        app.config["DEMO"] = {
+            "name": name,
+            "process": subprocess.Popen(DEMOS[name]["command"], cwd=ROOT, env=env,
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+        }
+        socketio.emit("demo", _demo_status())
+        return jsonify(_demo_status()), 202
+
     @app.get("/guard/state")
     def guard_state():
         return jsonify(app.config["GUARD"].state()), 200
@@ -566,7 +624,7 @@ def create_app(
         # Never intercept known API prefixes -- let Flask's earlier routes handle them.
         _api_prefixes = (
             "trace", "audit", "session", "knowledge", "health",
-            "socket.io", "static",
+            "guard", "path", "demo", "socket.io", "static",
         )
         if any(path == p or path.startswith(p + "/") for p in _api_prefixes):
             from flask import abort
