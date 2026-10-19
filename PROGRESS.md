@@ -676,3 +676,17 @@ its tools judged OK as registered tools, `rebook` pre-checked and allowed, `char
 approval and not run.
 
 Tests: 247 passing (15 new in `tests/test_connect.py`).
+
+### 2026-10-19 — interactive guide for first-time users
+
+`/connect` (React, `frontend_v2/src/pages/Connect.jsx`), reached from a *Connect your agent* button
+in the site nav and the dashboard header, and from a dismissible "Nothing to watch yet" prompt on an
+empty dashboard. Four steps with copyable code; a live check driven by real server state
+(`/health`, `/session` -- now listing `registered` tools -- and the `tools` / `goal` / `verdict`
+socket events); buttons that start the example agents through `POST /demo/run` (a fixed list of
+two, localhost only, one at a time, each a fresh run) with `/demo/status`. The SPA catch-all no
+longer swallows `/guard`, `/path` and `/demo` paths.
+
+Verified in a browser: both example buttons run their agents and the live check ticks all four
+items with no refresh; no sideways scroll at 390 / 768 / 1440 px on `/connect`, `/dashboard`, `/`;
+Lighthouse on `/connect` performance 92, accessibility 100. Tests: 253 passing.

@@ -120,6 +120,11 @@ On a typical run it invents three or four refund and escalation endpoints and ci
 
 ## Connect your own agent
 
+New here? Open **http://127.0.0.1:5000/connect** (the *Connect your agent* button on every page).
+It walks through the steps below with copyable code, a live check that ticks off as your agent
+connects (server up, tools registered, goal set, first step judged), and buttons that start the
+example agents so you can watch one on the dashboard without writing anything.
+
 Wrap your agent's tools with `@monitor` and call `sentinel.connect()` once. That is the whole
 integration: no changes to the server, nothing else in your agent.
 
