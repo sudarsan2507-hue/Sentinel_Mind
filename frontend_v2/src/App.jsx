@@ -7,6 +7,7 @@ import LandingPage from './pages/LandingPage';
 // socket client and the graph page just to read the hero.
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const KnowledgeGraph = lazy(() => import('./pages/KnowledgeGraph'));
+const Connect = lazy(() => import('./pages/Connect'));
 
 function App() {
   return (
@@ -15,6 +16,7 @@ function App() {
         <Route path="/" element={<LandingPage />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/graph" element={<KnowledgeGraph />} />
+        <Route path="/connect" element={<Connect />} />
       </Routes>
     </Suspense>
   );
