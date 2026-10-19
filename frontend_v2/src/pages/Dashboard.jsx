@@ -75,6 +75,14 @@ export default function Dashboard() {
   const [ready, setReady] = useState(false);
   // View options. Layout is remembered per browser; storage can be unavailable
   // (private mode), so reads and writes are guarded and the default still works.
+  // First visit: point new users at the connect guide until they dismiss it.
+  const [guideDismissed, setGuideDismissed] = useState(() => {
+    try { return localStorage.getItem('sm.guideDismissed') === '1'; } catch { return false; }
+  });
+  const dismissGuide = () => {
+    setGuideDismissed(true);
+    try { localStorage.setItem('sm.guideDismissed', '1'); } catch { /* storage unavailable */ }
+  };
   const [layout, setLayout] = useState(() => {
     try { return localStorage.getItem('sm.dashLayout') || 'split'; } catch { return 'split'; }
   });
@@ -222,7 +230,8 @@ export default function Dashboard() {
               {connected ? 'Live' : 'Disconnected'}
             </span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Link to="/connect" className={headerButton}>Connect your agent</Link>
             <a href="/audit/export" download className={headerButton}>Export log</a>
             <button
               type="button"
@@ -246,6 +255,22 @@ export default function Dashboard() {
 
       {!ready ? <main className="min-h-screen" aria-busy="true" /> : (
       <main className="max-w-container-max mx-auto px-margin-mobile md:px-margin-desktop py-6 md:py-8 flex flex-col gap-5">
+        {steps.length === 0 && !guideDismissed && (
+          <section aria-labelledby="first-visit" className="rounded-xl border border-primary-container/40 bg-primary-container/[0.05] px-5 py-4 flex flex-wrap items-center gap-x-6 gap-y-3">
+            <div className="min-w-0 flex-1">
+              <h2 id="first-visit" className="text-[16px] font-semibold text-on-background">Nothing to watch yet</h2>
+              <p className="mt-1 text-[15px] text-on-surface-variant">
+                Connect your own agent in three steps, or start an example agent and watch it here.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={dismissGuide} className={headerButton}>Dismiss</button>
+              <Link to="/connect" className="inline-flex min-h-11 items-center rounded-md bg-primary-container px-4 text-[14px] font-semibold text-[#00210a] hover:brightness-110 active:brightness-95 transition">
+                Show me how
+              </Link>
+            </div>
+          </section>
+        )}
         {/* ── Guard mode: halted run, and actions waiting for a human ── */}
         {halt && (
           <div role="alert" className="anomaly-banner rounded-xl border border-error/60 bg-error/10 px-5 py-4">
