@@ -1,4 +1,4 @@
-# SentinelMind — Progress Log
+# SentinelMind - Progress Log
 
 Running log of what's actually built and verified. Newest entries at the bottom.
 Plan and design decisions live in [PLAN.md](PLAN.md).
@@ -9,28 +9,28 @@ Plan and design decisions live in [PLAN.md](PLAN.md).
 
 | Component | State |
 |---|---|
-| `backend/decorator.py` | done — trace capture, subscriber bus, error passthrough |
-| `backend/session_context.py` | done — goal, bounded window, deterministic loop detection |
-| `backend/audit_log.py` | done — thread-safe store, filter/summary/export/clear |
-| `backend/meta_agent.py` | done — Groq verdict engine, context-aware, schema downgrade |
-| `backend/app.py` | done — Flask + SocketIO, 7 endpoints, `.env` loading |
-| `backend/demo_agent.py` | done — declares goal, 7-step scenario, `--record` / `--replay` / `--offline` |
-| `backend/real_agent.py` | done — genuine tool-calling agent, fails unscripted, `--learn` |
-| `backend/knowledge_graph.py` | done — capability-abstracted failure memory, persisted |
-| `frontend/index.html` | done — live graph, verdict feed, goal banner, stat row, REPLAY badge |
-| `evals/` | done — 9 labelled cases + scoring harness + learning experiment |
-| `tests/` | done — **151 / 151 passing**; backend coverage 84% |
-| `README.md` | done — documents the real agent, knowledge graph, and artifact pipeline |
-| End-to-end demo run | done — **verified live 2026-07-30**, 2 OK · 2 WARN · 5 ANOMALY |
+| `backend/decorator.py` | done - trace capture, subscriber bus, error passthrough |
+| `backend/session_context.py` | done - goal, bounded window, deterministic loop detection |
+| `backend/audit_log.py` | done - thread-safe store, filter/summary/export/clear |
+| `backend/meta_agent.py` | done - Groq verdict engine, context-aware, schema downgrade |
+| `backend/app.py` | done - Flask + SocketIO, 7 endpoints, `.env` loading |
+| `backend/demo_agent.py` | done - declares goal, 7-step scenario, `--record` / `--replay` / `--offline` |
+| `backend/real_agent.py` | done - genuine tool-calling agent, fails unscripted, `--learn` |
+| `backend/knowledge_graph.py` | done - capability-abstracted failure memory, persisted |
+| `frontend/index.html` | done - live graph, verdict feed, goal banner, stat row, REPLAY badge |
+| `evals/` | done - 9 labelled cases + scoring harness + learning experiment |
+| `tests/` | done - **151 / 151 passing**; backend coverage 84% |
+| `README.md` | done - documents the real agent, knowledge graph, and artifact pipeline |
+| End-to-end demo run | done - **verified live 2026-07-30**, 2 OK · 2 WARN · 5 ANOMALY |
 | Git repository | `adharshan-feature` merged with `origin/main` and **pushed** |
-| `DEMO.md` | done — pre-flight, script, fallback table, wording guardrails |
-| Deck updated for Groq | **not done — blocking** |
+| `DEMO.md` | done - pre-flight, script, fallback table, wording guardrails |
+| Deck updated for Groq | **not done - blocking** |
 
-**Tests passing:** 151 / 151 (deck says 15 — needs a one-word edit)
-**Eval accuracy:** **8 / 9** — re-measured 2026-07-30 after the prompt repair, with the corrected
+**Tests passing:** 151 / 151 (deck says 15 - needs a one-word edit)
+**Eval accuracy:** **8 / 9** - re-measured 2026-07-30 after the prompt repair, with the corrected
 percentile. One miss, `output_drifts_from_goal` (WARN expected, ANOMALY returned).
 **Verdict latency:** **p50 0.62s · p95 1.43s**, cold start 2.27s measured separately and excluded.
-**Structured output:** `json_object` — this model **rejects** strict `json_schema`, so the
+**Structured output:** `json_object` - this model **rejects** strict `json_schema`, so the
 documented fallback is what actually runs. Claim JSON mode, not strict schema enforcement.
 **Provider:** Groq (`llama-3.3-70b-versatile`), OpenAI-compatible endpoint
 **Pushed to GitHub:** no (requires explicit approval)
@@ -51,37 +51,37 @@ documented fallback is what actually runs. Claim JSON mode, not strict schema en
   all three loop calls come back ANOMALY, because a hallucinated-tool ANOMALY is already in the
   session window by the time the loop starts, so the first repeat is judged against an already
   unhealthy run. The loop is still *named* in the explanations ("called with the same input
-  multiple times in a row, indicating a potential infinite loop"), so the demo is honest — but
+  multiple times in a row, indicating a potential infinite loop"), so the demo is honest - but
   narrating an escalation over a screen showing three reds is not. `DEMO.md` says which to show
   when. Caught during a dress rehearsal, not on camera.
 - **Live demo run against the real API:** 9 events → 2 OK, 2 WARN, 5 ANOMALY, with genuine
   explanations ("has been called repeatedly with the same input, indicating an infinite
   loop"). Verdict latency 0.3–0.8s steady-state.
 - Rendered context block for a repeated call carries goal, preceding steps, and
-  `"has already occurred N time(s)"` — the loop signal reaching the model as a computed fact.
+  `"has already occurred N time(s)"` - the loop signal reaching the model as a computed fact.
 
-### Cold start — measured, and now paid at boot
+### Cold start - measured, and now paid at boot
 
 The first verdict of any server run used to take **~6s** (connection setup); every subsequent
 one was under a second. On stage the first node would sit grey noticeably longer than the rest.
 `app.py` now fires `MetaAgent.warm_up()` on a daemon thread at startup, paying both the TLS/pool
-cost and the format probe before anyone is watching. Failure is silent by design — a server that
+cost and the format probe before anyone is watching. Failure is silent by design - a server that
 refuses to start because the provider is unreachable would break offline replay, which is
 precisely the mode you need when the provider is unreachable.
 
 **Re-measured live 2026-07-30: 2.27s**, not the ~6s recorded earlier, and it no longer lands on
 the first verdict. The eval reports it on its own line rather than folding it into the latency
-distribution — excluding it silently would flatter the numbers.
+distribution - excluding it silently would flatter the numbers.
 
 ---
 
 ## Open items
 
-1. **Update the deck — blocking, and now the only thing between here and done.** Slide 4 says
+1. **Update the deck - blocking, and now the only thing between here and done.** Slide 4 says
    "Meta-Agent: Claude Sonnet"; reference [1] cites Anthropic docs and `claude-sonnet-4-6`.
    Both wrong. Slide 7 needs a Groq reference. Test count says 15, actual is **151**. The
-   impact slide can say **p95 1.43s** — measured, not asserted.
-2. **Diagnose the file corruption — still unresolved after two incidents.** It hit the system
+   impact slide can say **p95 1.43s** - measured, not asserted.
+2. **Diagnose the file corruption - still unresolved after two incidents.** It hit the system
    prompt on 2026-07-30, which no test would have caught. There is now a prompt-integrity
    test guarding that one file. Nothing guards the rest.
 3. **Rotate the Groq key.** Still not confirmed. The key in use passed through a corrupted
@@ -89,9 +89,9 @@ distribution — excluding it silently would flatter the numbers.
 4. **Is the learning loop real? First measured 2026-10-14:** cold 1.0 anomalies/run, warm 0,
    steps 12 → 5.5, two completed runs a side. Direction only; re-run with `--runs 5` for a
    number worth quoting as a rate.
-5. ~~`demo_agent.py` has 0% coverage~~ — closed 2026-07-30, now 85%.
+5. ~~`demo_agent.py` has 0% coverage~~ - closed 2026-07-30, now 85%.
 6. **LangChain wiring.** Deck names it as the monitored framework; the demo wraps plain
-   Python callables. `@monitor` is framework-agnostic so it's a small job — either wire it
+   Python callables. `@monitor` is framework-agnostic so it's a small job - either wire it
    or adjust the slide.
 7. **Grow the eval set.** 9 cases is enough to demo, thin to generalise from. Say "8 of 9 on
    our labelled set" to judges, never a percentage.
@@ -100,18 +100,18 @@ distribution — excluding it silently would flatter the numbers.
 
 ## Log
 
-### 2026-07-29 — Session 1
+### 2026-07-29 - Session 1
 
 - Read the deck, extracted the concept, confirmed runtime (Python 3.14.2, Windows 10).
 - Wrote `PLAN.md`. Built all 6 modules bottom-up. 15/15 tests green.
-- **Decision:** every meta-agent failure degrades to `WARN` with `degraded: true` — never
+- **Decision:** every meta-agent failure degrades to `WARN` with `degraded: true` - never
   `OK` (don't claim health we didn't verify), never `ANOMALY` (our outage isn't the
   monitored agent's fault).
-- Fixed a `SyntaxError` in `demo_agent.main()` — `SERVER` read before its `global`.
+- Fixed a `SyntaxError` in `demo_agent.main()` - `SERVER` read before its `global`.
 - **Flagged:** *"LangSmith logs. SentinelMind intervenes"* overstates the build.
   Auto-correction is out of scope, so the dashboard shows that button disabled.
 
-### 2026-07-29 — Session 1, provider swap
+### 2026-07-29 - Session 1, provider swap
 
 - **Decision: switched from Anthropic to Groq**, at the user's call. Free tier and LPU
   speed. Cost: the deck no longer matches the build, and verdict quality on a 70B open
@@ -123,10 +123,10 @@ distribution — excluding it silently would flatter the numbers.
   break the demo mid-run.
 - Added `temperature=0` (Groq accepts sampling params; Sonnet 5 rejects them) so verdicts
   are reproducible. Hardened empty/truncated/non-object response paths.
-- Added `.gitignore`, `.env.example`, and the missing `load_dotenv()` call — `python-dotenv`
+- Added `.gitignore`, `.env.example`, and the missing `load_dotenv()` call - `python-dotenv`
   was in requirements but nothing invoked it, so `.env` would have been silently ignored.
 
-### 2026-07-29 — Session 1, session context + evals
+### 2026-07-29 - Session 1, session context + evals
 
 - **Found a correctness gap, not a polish item:** the deck claims infinite-loop and
   goal-drift detection, and the per-step architecture could deliver neither. A loop exists
@@ -137,26 +137,26 @@ distribution — excluding it silently would flatter the numbers.
 - **Decision: count repeats ourselves, don't ask the model to.** Deterministic where
   deterministic is possible; LLM judgement only where judgement is required. Asking a model
   to notice three JSON blobs are identical is slower, costlier, and non-reproducible versus
-  computing it. Sorted-key hashing matters — without it, identical calls whose kwargs
+  computing it. Sorted-key hashing matters - without it, identical calls whose kwargs
   serialized in a different order would fingerprint differently and the loop would vanish.
 - **Decision:** when no goal is declared, the prompt says so explicitly. An admitted blind
   spot beats a model inventing a goal to measure drift against.
 - Wired context through `meta_agent.evaluate(event, context=...)` (optional, so existing
   callers and tests are unaffected), `app.py` (record *after* judging, so a step never sees
   itself as a repeat), `POST /session/goal` + `GET /session`, and the dashboard goal banner.
-- Built `evals/` — 9 labelled cases with written rationales, scored against the real model
+- Built `evals/` - 9 labelled cases with written rationales, scored against the real model
   with a confusion matrix and p50/p95 latency. This is the answer to slide 4's "How you
   know it works: tests or evals": tests prove the plumbing with a fake model, the eval
   proves the judgement with a real one and turns the 3-second claim into a measurement.
-- The harness **refuses to print accuracy when any case degraded** — a number computed over
+- The harness **refuses to print accuracy when any case degraded** - a number computed over
   failed API calls is worse than no number.
 - Added 5 tests for the context logic (20 total, up from 15).
 - Verified the rendered context block for the third identical call carries goal, history,
   and `"has already occurred 2 time(s)"`.
 
-### 2026-07-29 — Session 1, first live run
+### 2026-07-29 - Session 1, first live run
 
-- User supplied a Groq key. It was pasted into `.env.example` — the one file the
+- User supplied a Groq key. It was pasted into `.env.example` - the one file the
   `.gitignore` deliberately force-includes, so it would have been committed. Moved it to
   `.env` (ignored) and restored the template with a placeholder plus a warning header.
   Nothing was pushed, so nothing leaked.
@@ -164,8 +164,8 @@ distribution — excluding it silently would flatter the numbers.
   `loop_call_2`, predicted ANOMALY against expected OK/WARN.
 - **Diagnosed the misses as a flaw in the eval, not the model.** The loop cases used an
   off-goal tool (`fetch_pricing` on a refund-window task) *and* ran immediately after the
-  hallucinated-tool ANOMALY. The model's explanations cited both — goal-irrelevance and
-  prior session health — which are defensible reads. Three variables, one measurement: the
+  hallucinated-tool ANOMALY. The model's explanations cited both - goal-irrelevance and
+  prior session health - which are defensible reads. Three variables, one measurement: the
   cases could not tell us whether loop detection worked.
 - **Fixed the inputs, not the labels.** Relabelling until the model agrees is how an eval
   stops meaning anything. Rebuilt the loop block to use an on-goal tool
@@ -175,28 +175,28 @@ distribution — excluding it silently would flatter the numbers.
   `OK → WARN → ANOMALY` as designed. Confusion matrix is clean.
 - Live end-to-end run against the real API: 2 OK / 2 WARN / 5 ANOMALY with genuine
   explanations. Re-recorded `traces/last_run.json`.
-- **Found that `--replay` is not the offline fallback PLAN.md claimed** — it still calls the
+- **Found that `--replay` is not the offline fallback PLAN.md claimed** - it still calls the
   API to judge replayed events. Corrected the doc and raised it to the top open item; this
   is the biggest remaining demo risk.
 - Noted the ~6s cold start on the first verdict of any run.
 
-### 2026-07-29 — Session 1, file corruption incident
+### 2026-07-29 - Session 1, file corruption incident
 
 - Found **13 character-level corruptions across 7 files** between two verified runs. Not
-  edits — single-character mutations: `__future__` → `__future_`, `annotations` →
+  edits - single-character mutations: `__future__` → `__future_`, `annotations` →
   `annotation`, `return` → `continue`, `not` → `aa`, `>=` → `<=`, `id` → `ID`, `O` → `0`,
   and two characters dropped from the API key in `.env`.
-- Two were fatal (SyntaxError / ImportError — the project would not start). The worst was
+- Two were fatal (SyntaxError / ImportError - the project would not start). The worst was
   silent: `_fallback()` returning `confidence: 1.0` instead of `0.0`, i.e. claiming total
   certainty in a verdict it had failed to produce. That would have poisoned the audit log
   and the eval's confidence column without any visible error.
 - All fixed and re-verified: 20/20 tests, eval 8/9.
 - **Cause unknown and unresolved.** The pattern is not human editing and not a formatter.
   Suspect an IDE extension, a sync/backup tool, or failing storage. This needs diagnosing
-  before further work — anything built will keep degrading silently.
+  before further work - anything built will keep degrading silently.
 - Recommend rotating the Groq key: it passed through a corrupted file.
 
-### 2026-07-29 — Session 1, repo and README
+### 2026-07-29 - Session 1, repo and README
 
 - Wrote `README.md`: what it does, measured results with the caveats attached, the
   architecture argument for session context, quick start, API and config reference, design
@@ -209,7 +209,7 @@ distribution — excluding it silently would flatter the numbers.
   *(Superseded 2026-07-30: `origin` now points at
   `github.com/sudarsan2507-hue/Sentinel_Mind.git`. Still nothing pushed.)*
 
-### 2026-07-30 — Session 2, corruption recurrence and the offline fix
+### 2026-07-30 - Session 2, corruption recurrence and the offline fix
 
 - **The corruption came back, and this time it hit the system prompt.** Three sentences in
   `SYSTEM_PROMPT` were logically inverted:
@@ -225,13 +225,13 @@ distribution — excluding it silently would flatter the numbers.
   pins the three exact inversions so they cannot silently return. A prompt is behaviour; it
   deserves an assertion like any other. Note the limit honestly: this guards one file. The
   underlying cause is still undiagnosed, and nothing guards the rest.
-- **Environment was not reproducible.** No Python on this machine had the project's deps —
+- **Environment was not reproducible.** No Python on this machine had the project's deps - 
   3.14 had nothing, 3.10 had pytest/dotenv/requests/groq but no Flask, Flask-SocketIO, or
   openai. The 20/20 in the log above could not have been reproduced today as written. Created
   `.venv` on 3.14.2 from `requirements.txt` (already gitignored) and re-ran from there.
 - **Built the real offline fallback (open item #1, now closed).** `POST /replay` accepts a
   pre-judged `{event, verdict}` pair and writes straight to the session window, audit log, and
-  socket — no provider call on that path. `demo_agent.py --offline` drives it. Verified
+  socket - no provider call on that path. `demo_agent.py --offline` drives it. Verified
   end-to-end **with `GROQ_API_KEY` set to empty**: server boots, replay lands, audit log shows
   `OK` + `ANOMALY` correctly. `--replay` is unchanged and still re-judges.
 - **Decision: replayed verdicts are stamped `replayed: true`** and badged `REPLAY` on the
@@ -243,7 +243,7 @@ distribution — excluding it silently would flatter the numbers.
   exactly. Old event-only recordings still drive `--replay`; `--offline` refuses them with an
   explicit message rather than replaying a half-run.
 - **Found a second silent bug while verifying the first.** `/health` reported
-  `structured_output: json_object` on a server with *no API key* — the auth failure had been
+  `structured_output: json_object` on a server with *no API key* - the auth failure had been
   treated as a schema rejection, permanently downgrading the process to the weaker format. Any
   transient error on the first call did this. Invisible, because `json_object` works fine; we
   would simply have lost strict schema enforcement and gone on claiming it.
@@ -257,10 +257,10 @@ distribution — excluding it silently would flatter the numbers.
   limitations.
 - **Not done, and it matters:** the eval has not been re-run since the prompt repair, so the
   9/9 and p50/p95 figures above are pre-corruption measurements that have not been
-  re-confirmed. And `traces/last_run.json` does not exist — the offline path was verified with
+  re-confirmed. And `traces/last_run.json` does not exist - the offline path was verified with
   a synthetic file that was deleted afterwards. **Record a real one before demo day.**
 
-### 2026-07-30 — Session 2, full-project audit
+### 2026-07-30 - Session 2, full-project audit
 
 Read every remaining file that had not been opened this session: `evals/run_eval.py`,
 `test_decorator.py`, `test_audit_log.py`, `test_session_context.py`, all of
@@ -268,7 +268,7 @@ Read every remaining file that had not been opened this session: `evals/run_eval
 directly affects a number we quote.
 
 - **The p95 was computed one rank too low, always in our favour.**
-  `latencies[int(n * 0.95) - 1]` on 9 samples returns index 7 — the *second-slowest* verdict —
+  `latencies[int(n * 0.95) - 1]` on 9 samples returns index 7 - the *second-slowest* verdict - 
   and reported it as p95. Nearest rank for q=0.95, n=9 is the slowest sample. Every p95 we have
   published understates our own tail latency. Replaced with a documented `_percentile()` and
   four tests. The harness now also prints, when n < 20, that p95 *is* the slowest sample and
@@ -277,7 +277,7 @@ directly affects a number we quote.
   no BOM, 23 multi-byte sequences). Every em-dash and arrow on the dashboard would mis-decode.
   `lang` was also set to `"hin"`. Both corrected. Same corruption signature as the rest.
 - **`AuditLog.record` assigned `sequence` outside the lock.** Harmless while one worker thread
-  wrote to it; `POST /replay` — added earlier today — writes from the request thread, so there
+  wrote to it; `POST /replay` - added earlier today - writes from the request thread, so there
   are now two writers and two entries could take the same sequence number. Ordering is what
   makes a replay reproducible. Moved inside the lock and switched to a monotonic counter, so
   trimming an over-long log can't restart numbering and manufacture duplicates. Test hammers it
@@ -291,32 +291,32 @@ directly affects a number we quote.
   above the corrupted `charset`/`lang` attributes. Whoever or whatever wrote it, an instruction
   addressed to future readers of a source file is not a technical constraint, and it was
   protecting two genuine bugs. The attributes were fixed; the comment was left in place for the
-  team to decide on. **Flagged for discussion — if no teammate wrote it, this is evidence the
+  team to decide on. **Flagged for discussion - if no teammate wrote it, this is evidence the
   corruption is not random.**
 - Docs corrected: README headline metrics now marked pending re-measurement rather than quoted,
   `/replay` added to the API table, quick start documents the venv and the record/offline flow,
   cold-start limitation rewritten.
 - **32/32 tests passing** (was 26).
 
-### 2026-07-30 — Session 2, verified live after the repairs
+### 2026-07-30 - Session 2, verified live after the repairs
 
 Everything below was run against the real API with a fresh `.env`, after the prompt fix, the
 percentile fix, and the merge. These are the numbers to quote.
 
 - **Eval: 8/9, p50 0.62s, p95 1.43s**, cold start 2.27s measured separately and excluded.
-  Artifact written to `evals/results/meta_agent_eval_2026-07-30_10-13-27.json` — the first
+  Artifact written to `evals/results/meta_agent_eval_2026-07-30_10-13-27.json` - the first
   result in this project that can be re-plotted without re-running it.
 - **The prompt repair is confirmed working.** The loop block escalates `OK → WARN → ANOMALY`
   across three byte-identical calls, with confidence dipping to 0.70 on the ambiguous middle
   case. That is the behaviour the inverted prompt would have destroyed, and it is intact.
 - **One miss:** `output_drifts_from_goal`, expected WARN, returned ANOMALY on a summary that
   wandered off-goal. A severity disagreement on a borderline case, erring toward over-flagging
-  — the safe direction. Not relabelled: the label is defensible and moving it to match the
+  the safe direction. Not relabelled: the label is defensible and moving it to match the
   model is how an eval stops meaning anything.
 - **Open item #4 is answered, and the answer is the weaker one.** `/health` reports
   `structured_output: json_object`. `llama-3.3-70b-versatile` **rejects** strict `json_schema`,
   so the downgrade path is what actually runs in every demo. It parsed all 9 verdicts without a
-  single failure, so the mechanism works — but say "JSON mode enforced by the API", not "strict
+  single failure, so the mechanism works - but say "JSON mode enforced by the API", not "strict
   schema enforcement". Anyone can check this in ten seconds with a curl.
 - **Cold start is no longer 6s.** Measured 2.27s at boot, paid by the warm-up thread before
   anything is on screen.
@@ -327,9 +327,9 @@ percentile fix, and the merge. These are the numbers to quote.
   (2 OK / 2 WARN / 5 ANOMALY), entries badged `replayed`. Dead wifi and a dead provider are
   both survivable now.
 
-### 2026-07-30 — real agent, knowledge graph, and an invalid measurement
+### 2026-07-30 - real agent, knowledge graph, and an invalid measurement
 
-- **Built `backend/real_agent.py`** — a genuine tool-calling LLM agent, replacing the
+- **Built `backend/real_agent.py`** - a genuine tool-calling LLM agent, replacing the
   scripted mock as a subject. Runs `llama-3.1-8b-instant` (weak on purpose), gets an
   impossible task (issue a refund with only read-only tools), and an open
   `call_internal_api` dispatcher so it can invent endpoints the way a real agent would.
@@ -343,19 +343,19 @@ percentile fix, and the merge. These are the numbers to quote.
   (`/v1/orders/refund`, `/v1/requests/refund`, `/v1/refunds/create`). A store keyed on
   literal tool names would memorise strings that never recur. So `knowledge_graph.py`
   classifies endpoints into capability nodes and writes lessons about capabilities.
-- **Built `backend/knowledge_graph.py`** — persistent, count-weighted graph of
+- **Built `backend/knowledge_graph.py`** - persistent, count-weighted graph of
   `(tool) exhibits (failure_mode)`, `(tool) requires (capability)`,
   `(capability) missing_in (goal)`. Ingests only non-OK, non-degraded verdicts: a degraded
   verdict means we could not look, and remembering it would teach a lesson about our own
   outage. Distils to ranked, actionable lessons via `/knowledge/lessons`.
 - **Wired the loop:** `real_agent.py --learn` fetches those lessons and injects them into
   its own system prompt. This is retrieval-augmented prompting over accumulated failure
-  memory — **not training, no weights change.** Documented as such everywhere.
+  memory - **not training, no weights change.** Documented as such everywhere.
 - **The lessons it generated were correct and actionable**, e.g. *"You have NO tool that can
   issue refunds. Across 2 previous attempts an endpoint for it was invented and failed…
   state plainly that this action requires a human."*
 
-#### The measurement is NOT established — first result was an artifact
+#### The measurement is NOT established - first result was an artifact
 
 - First experiment reported **"anomalies fell 100%"**. That number was false. Every warm-phase
   verdict was `Meta-agent unavailable (RateLimitError: 429)`. Degraded verdicts are always
@@ -367,11 +367,11 @@ percentile fix, and the merge. These are the numbers to quote.
 - Also added rate-limit backoff to `meta_agent.py` (honours `Retry-After`, 3 retries). A 429
   is transient; degrading on the first one silently blinds the monitor for a whole burst.
 - Second attempt correctly reported `INVALID` rather than a number.
-- **Root cause: Groq free-tier daily cap exhausted** — `tokens per day (TPD): Limit 100000,
+- **Root cause: Groq free-tier daily cap exhausted** - `tokens per day (TPD): Limit 100000,
   Used 99893`. Six agent runs plus a verdict per step consumed the day's budget. The agent's
   own model was rate-limited too, producing 0–1 step runs.
 
-#### Open — does learning actually work?
+#### Open - does learning actually work?
 
 **Unknown. Do not claim it does.** The graph, the lessons, and the injection are all built and
 verified working; the *effect* on failure rate is unmeasured. To establish it:
@@ -382,10 +382,10 @@ python evals/run_learning_experiment.py --runs 3 --pause 45 --settle 12
 ```
 
 Needs a reset quota (rolling daily window) or a paid Groq tier. Budget roughly 25–30k tokens
-for a 3+3 run experiment. If the result comes back flat or worse, say so — the harness is
+for a 3+3 run experiment. If the result comes back flat or worse, say so - the harness is
 built to report that honestly.
 
-### 2026-10-11 — real-agent end-to-end, judge tuning, UI fixes
+### 2026-10-11 - real-agent end-to-end, judge tuning, UI fixes
 
 Ran `real_agent.py` (gpt-oss-20b) against the live server with a headless browser on the
 dashboard and graph pages (Playwright; browsers, caches and logs on E:, nothing on C:).
@@ -394,19 +394,19 @@ dashboard and graph pages (Playwright; browsers, caches and logs on E:, nothing 
 
 - **Missed loop.** The agent called `search_docs` six times with a *reworded* query each time.
   No fingerprints matched, so the repeat signal stayed silent and every step was judged OK.
-  Fixed: `SessionContext.tool_frequency()` — a second deterministic fact (calls of this tool in
+  Fixed: `SessionContext.tool_frequency()` - a second deterministic fact (calls of this tool in
   the window, distinct inputs) rendered into the judge's context, plus prompt guidance (3+ = WARN,
   5+ = ANOMALY). Model-call steps are excluded: the agent plans with one every step, and the
   first version had the judge calling the fifth planning call a loop.
 - **False positive.** Planning steps that chose `call_internal_api` were flagged as hallucinated
-  tools — the agent's own HTTP-tool name was not registered. Added to `KNOWN_TOOLS`; invented
+  tools - the agent's own HTTP-tool name was not registered. Added to `KNOWN_TOOLS`; invented
   endpoints are still traced as `internal_api:<endpoint>` and still unregistered.
 - **Latency misjudged.** "Over ~2 seconds is slow" was being applied to model calls. Prompt now
   scopes it to tool calls.
 - **Bad lesson learned.** The knowledge graph had distilled "call `agent_llm_call` once" from the
   loop verdicts above. `classify_failure` no longer files model-call steps as loops; the loop
   lesson now covers reworded loops. (The stale lesson remains in local `knowledge/` until
-  Clear Memory — its count stopped growing after the fix.)
+  Clear Memory - its count stopped growing after the fix.)
 - **Agent died on one bad generation.** Groq rejects unparseable tool-call JSON
   (`tool_use_failed`); the agent broke out of its loop at step 3. It now feeds the error back
   and retries, at most twice in a row.
@@ -415,17 +415,17 @@ dashboard and graph pages (Playwright; browsers, caches and logs on E:, nothing 
 
 | `reasoning_effort` | Eval | p95 | Note |
 |---|---|---|---|
-| provider default | — | 5.8s (Sept) | twice ran out of `max_tokens=512` mid-reasoning → no verdict |
+| provider default | - | 5.8s (Sept) | twice ran out of `max_tokens=512` mid-reasoning → no verdict |
 | low | 7/9 | 1.08s | over-called two WARN cases as ANOMALY |
 | **medium** (now default) | **9/9 ×3** | 1.53–2.04s | `max_tokens` raised to 1536 |
 
-Configurable via `SENTINEL_REASONING_EFFORT`. Nine cases, three runs — a demonstration, not a
+Configurable via `SENTINEL_REASONING_EFFORT`. Nine cases, three runs - a demonstration, not a
 statistic. Live judging is throughput-bound by the 8000 TPM limit: a 20-step run takes ~2 min
 to fully judge, and per-verdict latency climbs from ~1s to 10–20s mid-run as the queue waits.
 
 #### UI
 
-- vis-network is **bundled** (lazy chunk), not fetched from unpkg — the trace graph no longer
+- vis-network is **bundled** (lazy chunk), not fetched from unpkg - the trace graph no longer
   depends on venue wifi. Only Google Fonts load externally now.
 - **Fixed a race:** nodes that arrived before vis finished loading were dropped, so after any
   page reload the dashboard showed "20 NODES" over an empty canvas. Pre-existing, also with the CDN.
@@ -433,7 +433,7 @@ to fully judge, and per-verdict latency climbs from ~1s to 10–20s mid-run as t
   holds a readable zoom and follows the newest step.
 - Knowledge Graph page now has a **visual graph** (tools, failure modes, capabilities, goals;
   click a node to inspect) above the cards.
-- Repaired double-encoded UTF-8 across 15 frontend files — visible on screen as `â€”`, `â€¦`,
+- Repaired double-encoded UTF-8 across 15 frontend files - visible on screen as `â€”`, `â€¦`,
   `8â€“9 / 9`. Footer claimed "Meta-agent: Claude Sonnet 5"; it now reads the live model from `/health`.
 
 #### Final E2E (all fixes in)
@@ -445,16 +445,16 @@ selection works. Tests: **167 passing**.
 
 **Not committed.** Awaiting the go-ahead.
 
-### 2026-10-11 — every button has a purpose; knowledge graph rebuilt around reasoning
+### 2026-10-11 - every button has a purpose; knowledge graph rebuilt around reasoning
 
 - **Dead controls removed or wired.** The landing page had Login, Sign Up, Get Started, Start
-  Free Trial, Book Demo and 12 `href="#"` links — no auth, pricing or blog exists. Every control
+  Free Trial, Book Demo and 12 `href="#"` links - no auth, pricing or blog exists. Every control
   now goes somewhere real: dashboard, knowledge graph, in-page sections (`#features`,
   `#how-it-works`), or the README / ARCHITECTURE on GitHub (`src/lib/links.js`). Removed copy
   that was not true: "Join 500+ enterprises", "cryptographic precision", "© 2024".
 - **Knowledge graph page redesigned.** Opens on the failure modes (count, share, tools), not
-  a physics hairball. Picking one shows only its chain — failure → tools that hit it →
-  capability reached for → goal it was missing in — laid out left to right, line thickness for
+  a physics hairball. Picking one shows only its chain - failure → tools that hit it →
+  capability reached for → goal it was missing in - laid out left to right, line thickness for
   count. A reasoning panel gives what it is / why agents in general do this / why it matters /
   how widespread it is here / what the judge said / what fixes it / the lesson fed back.
   "Show everything" keeps the full graph one click away; raw edges sit in a collapsed table.
@@ -467,7 +467,7 @@ selection works. Tests: **167 passing**.
 - **Audit baseline (before Step 4 fixes):** Lighthouse perf mobile 29–66 / desktop 67–95,
   accessibility 91–96, best practices 100, SEO 82. Dashboard scrolls sideways at 390px.
 
-### 2026-10-11 — Step 4: UI quality pass (project-ui router skill)
+### 2026-10-11 - Step 4: UI quality pass (project-ui router skill)
 
 Router skill `.claude/skills/project-ui/SKILL.md` (local, not committed) pins the rules: keep
 the brand, one design skill per task, mobile first, 44px targets, Lighthouse perf ≥ 90 and
@@ -479,41 +479,41 @@ a11y ≥ 95, copy states only what is built.
 | Dashboard | 66 → 93 | 94 → 98 | 91 → 100 | 82 → 100 |
 | Knowledge graph | 29 → 90 | 67 → 97 | 96 → 100 | 82 → 100 |
 
-Best practices 100 throughout. Mobile 90 is on the line — Lighthouse varies a few points run
+Best practices 100 throughout. Mobile 90 is on the line - Lighthouse varies a few points run
 to run; the remaining cost is the React runtime itself (78 KB gz) and a 7 KB render-blocking CSS file.
 
 What changed, by finding:
-1. **Speed** — assets precompressed at build (`.gz`, Flask serves them, year-long cache on
+1. **Speed** - assets precompressed at build (`.gz`, Flask serves them, year-long cache on
    hashed files); JSON API answers over 1 KB gzipped; app pages lazy-loaded with an inline
    preload of the right chunk per URL; Material Symbols icon font dropped (icons are inline SVG);
    Google Fonts no longer render-blocking; `framer-motion` and 7 dead components removed.
    Main script 326 KB raw → 78 KB gzipped.
 2. **Graph page layout shift** 0.91 → 0.01–0.07; phones no longer download the 690 KB graph library.
-3. **Dashboard at 390px** — header wraps instead of scrolling sideways; Export stays visible;
+3. **Dashboard at 390px** - header wraps instead of scrolling sideways; Export stays visible;
    Clear asks for confirmation; empty trace panel no longer fills a phone screen.
 4. **Landing copy rewritten to what is built.** Hero replays five verbatim verdicts from a real
-   run. Sections: what it catches (and how it knows — computed vs judged), how it works (the real
+   run. Sections: what it catches (and how it knows - computed vs judged), how it works (the real
    decorator), measured results with their caveats. Removed: fake "weather-agent" log table,
    "self-healing" before/after, cost-spike and eval-trend claims, generic SaaS card grid.
-5. **Accessibility** — faint `/30–/60` text raised to full contrast, heading order fixed, labels
+5. **Accessibility** - faint `/30–/60` text raised to full contrast, heading order fixed, labels
    ≥ 12px with no tracked all-caps, body text 16px on phones, all controls ≥ 44px, a visible 2px
    green focus ring, `prefers-reduced-motion` respected.
-6. **Scroll reveal removed** — it hid every section until scrolled into view.
-7. **SEO** — meta description, `robots.txt`, per-page titles, theme colour, on-brand favicon.
+6. **Scroll reveal removed** - it hid every section until scrolled into view.
+7. **SEO** - meta description, `robots.txt`, per-page titles, theme colour, on-brand favicon.
 
 Verified: webapp-testing at 390/768/1440 (no sideways scroll, 0 console errors), Lighthouse on
 all 3 pages × 2 form factors, and a full real-agent E2E (20 steps, 20 judged, 0 degraded; the
 reasoning panel quotes the judge's real explanations). Tests: 174 passing.
 
-### 2026-10-11 — dashboard rebuilt as an analytical view
+### 2026-10-11 - dashboard rebuilt as an analytical view
 
 The vertical node chain spent a screen of height on twelve boxes and hid the pattern that
 matters. Replaced with plain SVG/HTML views (no chart library; the dashboard no longer loads
 vis-network):
 
-- **Run timeline** — one lane per tool, one column per step, a thread through the run in order.
+- **Run timeline** - one lane per tool, one column per step, a thread through the run in order.
   A loop is a lane lighting up repeatedly (the demo's `fetch_pricing` ×3 is unmissable).
-- **KPI tiles** — steps judged with a verdict-mix bar, anomaly rate, median/p95 verdict latency
+- **KPI tiles** - steps judged with a verdict-mix bar, anomaly rate, median/p95 verdict latency
   with a sparkline, longest same-tool streak (computed, like the repeat signal).
 - **Verdict latency per step** (one axis, median marked) and **verdicts by tool** (stacked, most
   anomalous first).
@@ -521,16 +521,16 @@ vis-network):
   scrolls to it. Feed cards carry a confidence meter, replay and degraded markers.
 - Status colour is always paired with shape (circle / triangle / diamond) and a label: the
   dataviz validator puts green vs amber at ΔE 5.3 for protan vision, below the safe line.
-- Motion: steps pop in, bars grow, verdicts slide in — short ease-out, off for reduced motion.
+- Motion: steps pop in, bars grow, verdicts slide in - short ease-out, off for reduced motion.
 
 Lighthouse dashboard: desktop 99, mobile 90, accessibility 100, layout shift 0 (the page now
 draws once session + verdicts are in, instead of drawing empty and reflowing).
 - **View options (follow-up):** Split / Stacked layout switch (remembered per browser; split now
   from 1024px, not 1280px), compact one-line feed with click-to-expand and Expand all, and
-  **Replay run** — once every step has a verdict, plays the run back step by step through the
+  **Replay run** - once every step has a verdict, plays the run back step by step through the
   timeline, tiles, charts and feed. Client-side only; nothing is re-judged.
 
-### 2026-10-12 — personal project; knowledge graph drawn as a graph
+### 2026-10-12 - personal project; knowledge graph drawn as a graph
 
 - Removed the hackathon branding (FRONTIER / Codecrash / VIT Chennai) from the landing and
   dashboard footers and the top of the README; SentinelMind is now a personal project.
@@ -539,25 +539,25 @@ draws once session + verdicts are in, instead of drawing empty and reflowing).
   inner ring (sized by count, with spokes), the tools that hit them (dashed = invented) and the
   capabilities they reached for on the outer rings. Deterministic layout, curved links, tool
   names drawn radially so neighbours never overlap. Hover lights a chain; click opens a short
-  card — count, share, one line of why, the latest verdict, the lesson as a headline — with the
+  card - count, share, one line of why, the latest verdict, the lesson as a headline - with the
   full reasoning behind "Why does this happen?". Lessons show as headlines ("Can't issue refunds
   · 6 attempts") that expand to the exact wording. Phones get wider rings and labels on tap.
 - Plain SVG: vis-network removed entirely (−169 KB gzipped). Graph page 7.7 KB gzipped.
   Lighthouse: desktop 97, mobile 92, accessibility 100.
 - **Follow-up:** every graph node is now a circle, told apart by colour (red failure, green tool,
-  violet invented tool, amber missing capability — named in the legend, card and screen-reader
+  violet invented tool, amber missing capability - named in the legend, card and screen-reader
   labels). Nodes and the agent can be dragged; links follow, a plain click still selects, and
   "Reset layout" restores the computed arrangement. The page top went back to the earlier
   "How this agent fails, and why" heading with the five failure tiles and share bars, above the
   round graph.
 
-### 2026-10-12 — no more pitch material
+### 2026-10-12 - no more pitch material
 
 SentinelMind is a standalone project now, not a hackathon entry. Removed `PITCH.md`,
 `docs/Presentation pitch.md`, `DEMO.md` (the recording runbook and spoken script) and the
 FRONTIER slide deck. Running and demoing it is covered by the README.
 
-### 2026-10-12 — README rewritten for the standalone project
+### 2026-10-12 - README rewritten for the standalone project
 
 New README: what it catches and how it knows, one-decorator integration, screenshots
 (`docs/screenshots/`: dashboard, failure memory, landing, phone), quick start, how it works,
@@ -566,7 +566,7 @@ limitations. Removed stale facts (32 tests, the old single-file dashboard as the
 disabled auto-correct button, vis-network credit) and presentation phrasing. Credits: built by
 Sudarsan; the first prototype was built with Jaaiwanth K and Adharshan N.
 
-### 2026-10-14 — guard mode: stop the bad step, then steer the agent
+### 2026-10-14 - guard mode: stop the bad step, then steer the agent
 
 **Built.** `backend/guard.py` + `POST /guard/check`: before a monitored tool runs, the decorator
 asks the server. Unregistered tool and third identical call are blocked by rule (no model
@@ -593,7 +593,7 @@ Plus one earlier live pair: off refunded $149 at step 7 after reading the order 
 on blocked the invented endpoint, held the erasure, finished in 8 steps with an honest email.
 The judge pre-check was verified directly against the real model: 58-day order blocked
 (ANOMALY 0.99), 10-day order allowed (OK 0.99). In the agent runs the agent never actually
-called `refund_order` with the guard on — the rule block and approval did the work.
+called `refund_order` with the guard on - the rule block and approval did the work.
 
 **What went wrong on the way.**
 - The first guard-off arm was all invalid: the agent's first model call timed out three times
@@ -608,7 +608,7 @@ called `refund_order` with the guard on — the rule block and approval did the 
 
 Tests: 208 passing.
 
-### 2026-10-14 — the right path: steer, don't just stop
+### 2026-10-14 - the right path: steer, don't just stop
 
 **Built.** `backend/path_graph.py` + `backend/paths/support_refund.json`: a known task's correct
 steps with preconditions and conditions evaluated on facts from tool outputs. The guard
@@ -638,11 +638,11 @@ scripts on Windows rewrote some files with CRLF endings; normalised back before 
 
 Tests: 232 passing.
 
-### 2026-10-14 — learning loop measured
+### 2026-10-14 - learning loop measured
 
 `evals/run_learning_experiment.py --runs 3` against a fresh server (memory backed up, wiped for
 the cold phase, restored afterwards). One run per phase hung past 300s on a slow provider call
-and, before a fix, was scored as 0 anomalies — a hung agent reads as a perfect one. Fixed: the
+and, before a fix, was scored as 0 anomalies - a hung agent reads as a perfect one. Fixed: the
 script now excludes crashed/hung runs from the means, and the agent's model client has a 60s
 timeout instead of the library's 10 minutes.
 
@@ -660,7 +660,7 @@ Raw artifact `evals/results/learning_2026-10-14_18-46-36.json` holds the pre-fix
 Also: `test_an_approved_call_runs` was timing-sensitive (50 ms approval window) and failed under
 machine load; the fixture now allows 0.5 s. Tests: 232 passing.
 
-### 2026-10-18 — connect any agent in one call
+### 2026-10-18 - connect any agent in one call
 
 **Problem.** Connecting an agent meant writing your own trace sender, calling the goal endpoint by
 hand, and editing `KNOWN_TOOLS` in `backend/app.py` -- otherwise every tool of a new agent was
@@ -677,7 +677,7 @@ approval and not run.
 
 Tests: 247 passing (15 new in `tests/test_connect.py`).
 
-### 2026-10-19 — interactive guide for first-time users
+### 2026-10-19 - interactive guide for first-time users
 
 `/connect` (React, `frontend_v2/src/pages/Connect.jsx`), reached from a *Connect your agent* button
 in the site nav and the dashboard header, and from a dismissible "Nothing to watch yet" prompt on an

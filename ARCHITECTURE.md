@@ -1,7 +1,7 @@
-# SentinelMind — Architecture & Technical Reference
+# SentinelMind - Architecture & Technical Reference
 
 What every piece is, what it does, and **why it works the way it does**. The
-"why" matters more than the "what" here — several decisions look arbitrary until
+"why" matters more than the "what" here - several decisions look arbitrary until
 you know the failure they prevent.
 
 Companion docs: [README](README.md) (what it is) · [PLAN](PLAN.md) (design
@@ -31,7 +31,7 @@ decisions) · [PROGRESS](PROGRESS.md) (what is verified).
 | `pytest` | 9.0.2 | 158 tests, fully offline |
 
 **No LLM framework.** No LangChain, no agent library. The tool-calling loop in
-`real_agent.py` is hand-written — see §7 for why that was deliberate.
+`real_agent.py` is hand-written - see §7 for why that was deliberate.
 
 ### Frontend
 
@@ -50,7 +50,7 @@ decisions) · [PROGRESS](PROGRESS.md) (what is verified).
 | Role | Model | Why |
 |---|---|---|
 | **Meta-agent** (the judge) | `openai/gpt-oss-120b`, `reasoning_effort=medium` | Judgement quality. Overridable via `SENTINEL_MODEL`. |
-| **Monitored agent** (the subject) | `openai/gpt-oss-20b` | The smaller model *on purpose* — see §7. |
+| **Monitored agent** (the subject) | `openai/gpt-oss-20b` | The smaller model *on purpose* - see §7. |
 
 Both on Groq, chosen for LPU inference speed: the product claim is a sub-second
 verdict, and a verdict is a short classification rather than a reasoning problem.
@@ -61,7 +61,7 @@ verdict, and a verdict is a short classification rather than a reasoning problem
 
 ```
 backend/
-  decorator.py         124   @monitor — trace capture + subscriber bus
+  decorator.py         124   @monitor - trace capture + subscriber bus
   session_context.py   134   goal + rolling window + deterministic repeat hashing
   meta_agent.py        443   trace + context -> Groq -> verdict
   knowledge_graph.py   368   failures -> capability graph -> lessons
@@ -75,7 +75,7 @@ tests/                 1903  158 tests, no network, no API key
 
 ---
 
-## 3. Request flow — one step, end to end
+## 3. Request flow - one step, end to end
 
 ```
    monitored agent calls a @monitor-wrapped function
@@ -149,7 +149,7 @@ session.record(event, verdict)          # after, not before
 ```
 
 Record first and every step appears in its own lookback window, counts as its own
-repeat, and **every call looks like a loop.** An off-by-one here doesn't crash —
+repeat, and **every call looks like a loop.** An off-by-one here doesn't crash - 
 it silently makes the product wrong.
 
 ### 5.3 Trace ingest is non-blocking
@@ -188,9 +188,9 @@ serialised in a different order would hash differently and the loop would go
 undetected.
 
 The window is **bounded** (default 8, `SENTINEL_CONTEXT_WINDOW`) so prompt cost
-stays flat on a long run — and a step from 200 calls ago is noise, not signal.
+stays flat on a long run - and a step from 200 calls ago is noise, not signal.
 
-### 5.6 Every failure degrades to WARN — never OK, never ANOMALY
+### 5.6 Every failure degrades to WARN - never OK, never ANOMALY
 
 | Choice | Reason |
 |---|---|
@@ -198,7 +198,7 @@ stays flat on a long run — and a step from 200 calls ago is noise, not signal.
 | Never `ANOMALY` | Our outage is not the monitored agent's fault |
 | Always `degraded: true` | The UI must distinguish "agent is fine-ish" from "we couldn't look" |
 
-This is why the whole system runs end-to-end **without an API key** — it never
+This is why the whole system runs end-to-end **without an API key** - it never
 crashes, it just reports that it couldn't look.
 
 **The trap this creates:** degraded verdicts are always WARN and *can never be
@@ -207,7 +207,7 @@ produced a false "anomalies fell 100%" result once. Both `run_eval.py` and
 `run_learning_experiment.py` now refuse to report any number when a step went
 unjudged.
 
-### 5.7 Bounded backoff — a stall is worse than a fast failure
+### 5.7 Bounded backoff - a stall is worse than a fast failure
 
 Judging is single-threaded, so a sleep stalls the whole queue.
 
@@ -217,7 +217,7 @@ Judging is single-threaded, so a sleep stalls the whole queue.
   costs `max_backoff × retries` and fails anyway.
 
 `_retry_after` reads the `Retry-After` header, then falls back to parsing the
-figure out of the message body (`"Please try again in 9m37.152s"` — where Groq
+figure out of the message body (`"Please try again in 9m37.152s"` - where Groq
 reports it on daily-cap errors and the header is absent). If the required wait
 exceeds `max_backoff` (5s), degrade now.
 
@@ -263,7 +263,7 @@ run 2:  /v1/orders/refund   /v1/customers/notifications
 run 3:  /v1/orders/refund   /v1/orders/notification    /v1/support/escalate
 ```
 
-The **capability** is stable — refund, notify, escalate. The **exact path is
+The **capability** is stable - refund, notify, escalate. The **exact path is
 different almost every time.** A store keyed on literal tool names would memorise
 strings that never recur and generalise nothing.
 
@@ -275,7 +275,7 @@ next run. *"`/v1/orders/refund` returned 403"* does not.
 
 `classify_capability` returns a sentinel when nothing matches, rather than
 inventing a plausible name. Lesson text special-cases it and names the **tools**
-instead — the part we actually know.
+instead - the part we actually know.
 
 > An earlier template rendered the sentinel literally: *"You have NO tool that can
 > an unrecognised capability."* Ungrammatical, and it asserted a capability gap
@@ -287,8 +287,8 @@ Only **non-OK, non-degraded** verdicts. A degraded verdict means we could not
 look; remembering it would teach a lesson about our own outage rather than about
 the agent.
 
-A step can exhibit more than one mode — an unregistered tool that *also* raised is
-both a hallucination and an exception — so both edges are recorded, not just the
+A step can exhibit more than one mode - an unregistered tool that *also* raised is
+both a hallucination and an exception - so both edges are recorded, not just the
 primary one.
 
 ### The loop back into the agent
@@ -297,7 +297,7 @@ primary one.
 own system prompt.
 
 > **This is retrieval-augmented prompting over accumulated failure memory. It is
-> NOT training — no weights change.** Whether it reduces the failure rate is an
+> NOT training - no weights change.** Whether it reduces the failure rate is an
 > open empirical question measured by `evals/run_learning_experiment.py`, not a
 > claim the project makes.
 
@@ -310,24 +310,24 @@ own system prompt.
 | Nature | Scripted mock | Real tool-calling agent |
 | Model | none | `openai/gpt-oss-20b` |
 | Failures | Planted, deterministic | Genuine, different every run |
-| Use | On stage — failures on cue | Proving the tool works |
+| Use | On stage - failures on cue | Proving the tool works |
 
 **Why the subject model is deliberately weak:** a monitoring tool that only works
 on frontier models is not much of a monitoring tool, and cheap models are what
 actually get deployed.
 
 **Why the task is impossible:** the agent is asked to determine refund
-eligibility *and then issue the refund and notify the customer* — with read-only
+eligibility *and then issue the refund and notify the customer* - with read-only
 tools. What it does when cornered is its own choice.
 
 **Why `call_internal_api` is an open dispatcher:** the endpoint is a free-text
 argument rather than a fixed schema, mirroring a real internal gateway or MCP
-server. That lets the agent invent capabilities — and an invented endpoint reaches
+server. That lets the agent invent capabilities - and an invented endpoint reaches
 SentinelMind as a tool name absent from the registry, which is a **real**
 hallucination rather than a simulated one.
 
 **Why no LangChain:** `AgentExecutor` validates tool names and would have
-*blocked* the hallucinated endpoints — hiding the exact behaviour the project
+*blocked* the hallucinated endpoints - hiding the exact behaviour the project
 exists to demonstrate. A hand-written loop keeps the failure observable.
 
 Observed unscripted, across runs: invented `/v1/orders/refund`,
@@ -336,7 +336,7 @@ three times; hallucinated a **$100 refund on a $149 order**.
 
 ---
 
-## 8. Offline mode — the two fallbacks differ
+## 8. Offline mode - the two fallbacks differ
 
 | Mode | Skips the pipeline | Survives dead network |
 |---|---|---|
@@ -344,10 +344,10 @@ three times; hallucinated a **$100 refund on a $149 order**.
 | `--offline` | ✅ | ✅ replays recorded **verdicts** to `/replay` |
 
 `--offline` writes straight to the audit log and socket. Nothing leaves the
-machine. Entries are badged `replayed` on the dashboard — a recorded verdict shown
+machine. Entries are badged `replayed` on the dashboard - a recorded verdict shown
 as a live one would be a lie, and the audit log is meant to be the record of truth.
 
-> **A recording made while rate-limited still loads and still plays** — it just
+> **A recording made while rate-limited still loads and still plays** - it just
 > replays "Meta-agent unavailable". It fails *silently*, in the mode you fall back
 > to when everything else has broken. Check for degraded entries before trusting it.
 
@@ -361,7 +361,7 @@ as a live one would be a lie, and the audit log is meant to be the record of tru
 | `evals/run_eval.py` | Verdict accuracy vs 9 labelled cases + p50/p95 latency | ✅ 8/9, p50 0.62s, p95 1.43s |
 | `evals/run_learning_experiment.py` | Does memory reduce failures? | ⏳ **unmeasured** |
 
-Both eval harnesses **refuse to print a number when any step went unjudged** —
+Both eval harnesses **refuse to print a number when any step went unjudged** - 
 §5.6 explains why a rate-limited run would otherwise score perfectly.
 
 Each case in `evals/cases.py` carries a written rationale, so a disagreement is a
@@ -369,7 +369,7 @@ discussion about the label rather than a mystery.
 
 **On isolating variables:** the first version of the loop cases used an off-goal
 tool *and* ran immediately after an ANOMALY, so a wrong verdict couldn't be
-attributed to any single cause. Fixed by changing the **inputs**, not the labels —
+attributed to any single cause. Fixed by changing the **inputs**, not the labels - 
 relabelling until the model agrees is how an eval stops meaning anything.
 
 ---
@@ -378,7 +378,7 @@ relabelling until the model agrees is how an eval stops meaning anything.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `GROQ_API_KEY` | — | **Required.** Free at console.groq.com |
+| `GROQ_API_KEY` | - | **Required.** Free at console.groq.com |
 | `SENTINEL_MODEL` | `openai/gpt-oss-120b` | Judge model |
 | `SENTINEL_REASONING_EFFORT` | `medium` | gpt-oss reasoning effort (`default` sends none) |
 | `SENTINEL_AGENT_MODEL` | `openai/gpt-oss-20b` | Subject model |
@@ -394,9 +394,9 @@ account shares the same exhausted budget.
 ## 11. Known limits
 
 - **No auto-correction.** Detect and explain only; the button is deliberately disabled.
-- **The learning loop's effect is unmeasured.** Built and verified working — that is not the same claim.
+- **The learning loop's effect is unmeasured.** Built and verified working - that is not the same claim.
 - **Nine eval cases** is a demonstration, not a generalisation.
 - **`temperature=0` is not determinism.** LLM inference varies run to run; report ranges.
 - **LangChain is not wired.** `@monitor` is framework-agnostic, but that path is untested.
-- **`frontend_v2/dist` is gitignored** — a fresh clone needs `npm install && npm run build`.
-- **Cold start** — the first verdict of a fresh process pays connection setup.
+- **`frontend_v2/dist` is gitignored** - a fresh clone needs `npm install && npm run build`.
+- **Cold start** - the first verdict of a fresh process pays connection setup.
