@@ -12,7 +12,7 @@ from guard import ALLOW, BLOCK, HALT, PENDING, Guard
 from knowledge_graph import KnowledgeGraph
 from path_graph import (
     DONE_ALREADY, FORBIDDEN, KNOWN_WRONG, OFF_PATH, ON_PATH, PREMATURE,
-    PathGraph, PathTracker, choose_path,
+    PathTracker, choose_path,
 )
 
 GOAL = "Resolve the refund complaint for order ord_5512 according to policy"
