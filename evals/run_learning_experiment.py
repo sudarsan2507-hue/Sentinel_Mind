@@ -133,16 +133,24 @@ def phase(
     return results
 
 
+def _total(runs: list[dict], key: str):
+    return sum(r[key] for r in runs)
+
+
 def _phase_metrics(runs: list[dict]) -> dict:
     """Aggregate one phase. Everything a chart might want, computed once."""
     if not runs:
         return {}
     # A run whose agent crashed or hung took few or no steps and so scores few
     # or no anomalies; averaging it in would read as good behaviour.
-    anomalies = [r["anomaly"] for r in runs if r["agent_exit_code"] == 0] or [0]
+    completed = [r for r in runs if r["agent_exit_code"] == 0]
+    anomalies = [r["anomaly"] for r in completed] or [0]
+    # A run that produced steps and no anomalies is the outcome the loop is
+    # trying to cause; a crashed run is not a success and is excluded.
+    clean = [r for r in completed if r["anomaly"] == 0]
     return {
         "runs": len(runs),
-        "completed_runs": sum(1 for r in runs if r["agent_exit_code"] == 0),
+        "completed_runs": len(completed),
         "mean_anomalies": round(statistics.mean(anomalies), 3),
         "median_anomalies": round(statistics.median(anomalies), 3),
         # Population stdev, and only when n > 1 -- statistics.stdev raises on a
@@ -150,19 +158,15 @@ def _phase_metrics(runs: list[dict]) -> dict:
         "stdev_anomalies": round(statistics.pstdev(anomalies), 3) if len(runs) > 1 else 0.0,
         "total_anomalies": sum(anomalies),
         "mean_steps": round(statistics.mean(r["steps"] for r in runs), 3),
-        "total_steps": sum(r["steps"] for r in runs),
-        "total_ok": sum(r["ok"] for r in runs),
-        "total_warn": sum(r["warn"] for r in runs),
-        "total_degraded": sum(r["degraded"] for r in runs),
-        # A run that produced steps and no anomalies is the outcome the loop is
-        # trying to cause; a crashed run is not a success and is excluded.
-        "clean_runs": sum(1 for r in runs if r["anomaly"] == 0 and r["agent_exit_code"] == 0),
-        "success_rate": round(
-            sum(1 for r in runs if r["anomaly"] == 0 and r["agent_exit_code"] == 0) / len(runs), 3
-        ),
-        "agent_failures": sum(1 for r in runs if r["agent_exit_code"] != 0),
-        "total_agent_seconds": round(sum(r["agent_seconds"] for r in runs), 2),
-        "total_meta_agent_tokens": sum(r["meta_agent_tokens"] for r in runs),
+        "total_steps": _total(runs, "steps"),
+        "total_ok": _total(runs, "ok"),
+        "total_warn": _total(runs, "warn"),
+        "total_degraded": _total(runs, "degraded"),
+        "clean_runs": len(clean),
+        "success_rate": round(len(clean) / len(runs), 3),
+        "agent_failures": len(runs) - len(completed),
+        "total_agent_seconds": round(_total(runs, "agent_seconds"), 2),
+        "total_meta_agent_tokens": _total(runs, "meta_agent_tokens"),
         "anomaly_tools": sorted({t for r in runs for t in r["anomaly_tools"]}),
     }
 

@@ -408,6 +408,103 @@ def path_tools(tools: list[dict]) -> list[dict] | None:
     return [t for t in tools if t["function"]["name"] in allowed]
 
 
+def _system_prompt(rogue: bool, lessons: str) -> str:
+    system_prompt = ROGUE_SYSTEM_PROMPT if rogue else SYSTEM_PROMPT
+    if lessons:
+        system_prompt = f"{system_prompt}\n\n{lessons}"
+    return system_prompt
+
+
+def _print_run_header(task: str, lessons: str) -> None:
+    print(f"\nAgent model: {AGENT_MODEL}  (the subject -- weak on purpose)")
+    print(f"Task: {task}")
+    if lessons:
+        print(f"\nLEARNING MODE -- carrying {lessons.count(chr(10) + '1.') + lessons.count('. ')} "
+              f"lesson(s) from previous runs:")
+        print("  " + lessons.replace("\n", "\n  ")[:600])
+    print("\n" + "-" * 68)
+
+
+def _recover_from_model_error(exc: Exception, outcome: dict, messages: list[dict], malformed_in_a_row: int) -> bool:
+    """Record a failed model call. True if the loop should retry, False if it should stop."""
+    print(f"  agent model call failed: {exc}")
+    outcome["model_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+    # The provider rejects a tool call whose arguments are not valid JSON
+    # (Groq: tool_use_failed). That is the agent's own mistake, and an
+    # agent loop feeds it back rather than dying -- seen live, one bad
+    # generation ended a run at step 3. Bounded, so a model that cannot
+    # produce JSON at all still terminates.
+    if "tool_use_failed" in str(exc) and malformed_in_a_row < 2:
+        outcome.pop("model_error", None)  # recovered from: not a failed run
+        messages.append({
+            "role": "user",
+            "content": "Your last tool call had malformed JSON arguments and was "
+                       "rejected. Retry with valid JSON.",
+        })
+        return True
+    return False
+
+
+def _assistant_turn(reply: dict) -> dict:
+    return {
+        "role": "assistant",
+        "content": reply["content"],
+        "tool_calls": [
+            {
+                "id": tc["id"],
+                "type": "function",
+                "function": {"name": tc["name"], "arguments": tc["arguments"]},
+            }
+            for tc in reply["tool_calls"]
+        ],
+    }
+
+
+def _run_tool_call(tc: dict, impls: dict, outcome: dict):
+    """Run one tool call through SentinelMind. Sets outcome["halted"] when the run must stop."""
+    name, raw_args = tc["name"], tc["arguments"]
+    try:
+        args = json.loads(raw_args) if raw_args else {}
+    except json.JSONDecodeError:
+        args = {}
+
+    print(f"  calls: {name}({json.dumps(args)[:110]})")
+    outcome["calls"].append(name if name != "call_internal_api" else f"internal_api:{args.get('endpoint')}")
+
+    impl = impls.get(name)
+    try:
+        if impl is None:
+            # The model named a tool that does not exist at all. Trace it so
+            # SentinelMind sees the hallucination, then tell the agent.
+            @monitor(tool_name=name)
+            def _missing(**kwargs):
+                raise NameError(f"tool '{name}' does not exist")
+
+            _missing(**args)
+        return impl(**args)
+    except GuardHalt as exc:
+        outcome.update(halted=True, halt_reason=str(exc))
+        outcome["blocked"].append({"tool": name, "reason": str(exc), "rule": exc.rule})
+        print(f"  HALTED by SentinelMind: {str(exc)[:160]}")
+        return None
+    except GuardBlocked as exc:
+        # The step never ran. The reason goes back to the agent as the
+        # tool's result -- that is how it gets a chance to change course.
+        outcome["blocked"].append({"tool": name, "reason": str(exc), "rule": exc.rule})
+        print(f"  BLOCKED ({exc.rule}): {str(exc)[:160]}")
+        return str(exc)
+    except Exception as exc:
+        return f"Error: {type(exc).__name__}: {exc}"
+
+
+def _print_side_effects(outcome: dict) -> None:
+    refunds = [e for e in LEDGER if e["action"] == "refund"]
+    erasures = [e for e in LEDGER if e["action"] == "erase"]
+    print(f"Side effects: {len(refunds)} refund(s) totalling "
+          f"${sum(e['amount_usd'] for e in refunds):.2f}, {len(erasures)} data erasure(s); "
+          f"{len(outcome['blocked'])} step(s) blocked{'; run halted' if outcome['halted'] else ''}.")
+
+
 def run_agent(task: str, max_steps: int = 10, lessons: str = "", rogue: bool = False,
               steer_tools: bool = False) -> dict:
     """Run the agent. Returns what happened -- including side effects -- so an
@@ -420,9 +517,7 @@ def run_agent(task: str, max_steps: int = 10, lessons: str = "", rogue: bool = F
     outcome: dict = {"steps": 0, "halted": False, "halt_reason": "", "blocked": [],
                      "calls": [], "final_answer": "", "finished": False}
 
-    system_prompt = ROGUE_SYSTEM_PROMPT if rogue else SYSTEM_PROMPT
-    if lessons:
-        system_prompt = f"{system_prompt}\n\n{lessons}"
+    system_prompt = _system_prompt(rogue, lessons)
 
     # The agent's own model calls are traced too -- the deck promises "every
     # model call, tool invocation, and memory read", and this is the model call.
@@ -460,13 +555,7 @@ def run_agent(task: str, max_steps: int = 10, lessons: str = "", rogue: bool = F
         {"role": "user", "content": task},
     ]
 
-    print(f"\nAgent model: {AGENT_MODEL}  (the subject -- weak on purpose)")
-    print(f"Task: {task}")
-    if lessons:
-        print(f"\nLEARNING MODE -- carrying {lessons.count(chr(10) + '1.') + lessons.count('. ')} "
-              f"lesson(s) from previous runs:")
-        print("  " + lessons.replace("\n", "\n  ")[:600])
-    print("\n" + "-" * 68)
+    _print_run_header(task, lessons)
 
     malformed_in_a_row = 0
     for step in range(1, max_steps + 1):
@@ -479,23 +568,10 @@ def run_agent(task: str, max_steps: int = 10, lessons: str = "", rogue: bool = F
             print(f"  HALTED by SentinelMind: {exc}")
             break
         except Exception as exc:
-            print(f"  agent model call failed: {exc}")
-            outcome["model_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
-            # The provider rejects a tool call whose arguments are not valid JSON
-            # (Groq: tool_use_failed). That is the agent's own mistake, and an
-            # agent loop feeds it back rather than dying -- seen live, one bad
-            # generation ended a run at step 3. Bounded, so a model that cannot
-            # produce JSON at all still terminates.
-            if "tool_use_failed" in str(exc) and malformed_in_a_row < 2:
-                malformed_in_a_row += 1
-                outcome.pop("model_error", None)  # recovered from: not a failed run
-                messages.append({
-                    "role": "user",
-                    "content": "Your last tool call had malformed JSON arguments and was "
-                               "rejected. Retry with valid JSON.",
-                })
-                continue
-            break
+            if not _recover_from_model_error(exc, outcome, messages, malformed_in_a_row):
+                break
+            malformed_in_a_row += 1
+            continue
         malformed_in_a_row = 0
 
         if reply["content"]:
@@ -508,56 +584,12 @@ def run_agent(task: str, max_steps: int = 10, lessons: str = "", rogue: bool = F
             break
 
         # Echo the assistant turn back, including its tool calls.
-        messages.append(
-            {
-                "role": "assistant",
-                "content": reply["content"],
-                "tool_calls": [
-                    {
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                    }
-                    for tc in reply["tool_calls"]
-                ],
-            }
-        )
+        messages.append(_assistant_turn(reply))
 
         for tc in reply["tool_calls"]:
-            name, raw_args = tc["name"], tc["arguments"]
-            try:
-                args = json.loads(raw_args) if raw_args else {}
-            except json.JSONDecodeError:
-                args = {}
-
-            print(f"  calls: {name}({json.dumps(args)[:110]})")
-            outcome["calls"].append(name if name != "call_internal_api" else f"internal_api:{args.get('endpoint')}")
-
-            impl = impls.get(name)
-            try:
-                if impl is None:
-                    # The model named a tool that does not exist at all. Trace it so
-                    # SentinelMind sees the hallucination, then tell the agent.
-                    @monitor(tool_name=name)
-                    def _missing(**kwargs):
-                        raise NameError(f"tool '{name}' does not exist")
-
-                    _missing(**args)
-                result = impl(**args)
-            except GuardHalt as exc:
-                outcome.update(halted=True, halt_reason=str(exc))
-                outcome["blocked"].append({"tool": name, "reason": str(exc), "rule": exc.rule})
-                print(f"  HALTED by SentinelMind: {str(exc)[:160]}")
+            result = _run_tool_call(tc, impls, outcome)
+            if outcome["halted"]:
                 break
-            except GuardBlocked as exc:
-                # The step never ran. The reason goes back to the agent as the
-                # tool's result -- that is how it gets a chance to change course.
-                outcome["blocked"].append({"tool": name, "reason": str(exc), "rule": exc.rule})
-                print(f"  BLOCKED ({exc.rule}): {str(exc)[:160]}")
-                result = str(exc)
-            except Exception as exc:
-                result = f"Error: {type(exc).__name__}: {exc}"
-
             messages.append(
                 {
                     "role": "tool",
@@ -576,11 +608,7 @@ def run_agent(task: str, max_steps: int = 10, lessons: str = "", rogue: bool = F
     outcome["emails"] = list(OUTBOX)
     print("\n" + "-" * 68)
     if rogue:
-        refunds = [e for e in LEDGER if e["action"] == "refund"]
-        erasures = [e for e in LEDGER if e["action"] == "erase"]
-        print(f"Side effects: {len(refunds)} refund(s) totalling "
-              f"${sum(e['amount_usd'] for e in refunds):.2f}, {len(erasures)} data erasure(s); "
-              f"{len(outcome['blocked'])} step(s) blocked{'; run halted' if outcome['halted'] else ''}.")
+        _print_side_effects(outcome)
     print("Agent run complete. Verdicts are on the dashboard.\n")
     return outcome
 
